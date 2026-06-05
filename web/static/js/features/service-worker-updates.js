@@ -73,6 +73,67 @@ export function createServiceWorkerUpdatesFeature() {
       .filter(asset => asset === '/' || asset.startsWith('/static/') || asset === '/index.html' || asset === '/manifest.json');
   }
 
+
+  function waitForWorkerState(worker, desiredStates, timeoutMs = 10000) {
+    if (!worker) return Promise.resolve(false);
+    if (desiredStates.includes(worker.state)) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        worker.removeEventListener('statechange', onStateChange);
+        resolve(false);
+      }, timeoutMs);
+      function onStateChange() {
+        if (!desiredStates.includes(worker.state)) return;
+        clearTimeout(timeout);
+        worker.removeEventListener('statechange', onStateChange);
+        resolve(true);
+      }
+      worker.addEventListener('statechange', onStateChange);
+    });
+  }
+
+  function resolveWithTimeout(promise, timeoutMs, fallbackValue = false) {
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => resolve(fallbackValue), timeoutMs);
+      Promise.resolve(promise).then((value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      }).catch(() => {
+        clearTimeout(timeout);
+        resolve(fallbackValue);
+      });
+    });
+  }
+
+
+  async function ensureOfflineServiceWorkerReadyAfterHardReload() {
+    if (!('serviceWorker' in navigator) || typeof navigator.serviceWorker?.register !== 'function') return false;
+    try {
+      const registration = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
+      swRegistration = registration;
+      await registration.update().catch(() => null);
+
+      if (registration.waiting) {
+        registration.waiting.postMessage({ action: 'skipWaiting' });
+        await waitForWorkerState(registration.waiting, ['activated'], 12000);
+      }
+
+      if (registration.installing) {
+        await waitForWorkerState(registration.installing, ['installed', 'activated'], 12000);
+        if (registration.waiting) {
+          registration.waiting.postMessage({ action: 'skipWaiting' });
+          await waitForWorkerState(registration.waiting, ['activated'], 12000);
+        }
+      }
+
+      await resolveWithTimeout(navigator.serviceWorker.ready, 2500, null);
+      return Boolean(registration.active || navigator.serviceWorker.controller);
+    } catch (error) {
+      console.warn('Forced app reload could not restore offline service worker before navigation', error);
+      return false;
+    }
+  }
+
   async function fetchHardReloadAssets() {
     let assets = FALLBACK_HARD_RELOAD_ASSETS;
     try {
@@ -273,18 +334,15 @@ export function createServiceWorkerUpdatesFeature() {
   async function forceReloadApp() {
     const buttons = Array.from(document.querySelectorAll('#force-refresh-btn, [data-force-refresh-button]'));
     const previousTitles = new Map(buttons.map(button => [button, button.title]));
+
+    if (navigator.onLine === false || buttons.some(button => button.disabled || button.getAttribute('aria-disabled') === 'true')) {
+      console.warn('Forced app reload skipped because the app is offline');
+      return;
+    }
+
     for (const button of buttons) {
       button.disabled = true;
       button.title = 'Web-App wird neu geladen…';
-    }
-
-    if (navigator.onLine === false) {
-      console.warn('Forced app reload skipped because browser reports offline');
-      for (const button of buttons) {
-        button.disabled = false;
-        button.title = previousTitles.get(button) || 'Web-App neu herunterladen und Cache aktualisieren';
-      }
-      return;
     }
 
     try {
@@ -306,6 +364,7 @@ export function createServiceWorkerUpdatesFeature() {
           .map(name => caches.delete(name).catch(() => false)));
       }
       await fetchHardReloadAssets();
+      await resolveWithTimeout(ensureOfflineServiceWorkerReadyAfterHardReload(), 7000, false);
     } catch (err) {
       console.error('Forced app reload cleanup failed:', err);
     }
