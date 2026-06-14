@@ -29,7 +29,7 @@ nia-todo is designed for private self-hosting: install the server, open the web 
 - 📱 Offline-capable PWA with local IndexedDB sync queue
 - 🖥️ Native Windows app wrapper
 - 🤖 Native Android APK
-- 🔐 Auth, admin panel, API keys, CSRF protection, and per-user data isolation
+- 🔐 Auth, admin panel, API keys, CSRF protection, OIDC/SSO support, and per-user data isolation
 - 🛡️ 2FA/MFA with TOTP, passkeys/WebAuthn, email-code fallback, recovery codes, trusted devices, and admin policy
 - 🔔 Native local reminders on Windows and Android; browser/PWA push remains browser/PWA-only
 - 🎙️ BrainDump voice capture for turning spoken notes into reviewed todo candidates, backed by configurable STT/LLM providers
