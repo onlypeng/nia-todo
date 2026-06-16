@@ -45,10 +45,6 @@ export function renderTodoItem(t) {
   const hasDesc = desc && desc.length > 0;
   const idArg = JSON.stringify(t.id);
   const pinned = Boolean(t.is_pinned);
-  const badgeHtml = [
-    pinned ? `<span class="todo-badge pinned" title="${escapeHtml(i18nT('todo.pinned'))}">${iconSvg('star')} ${escapeHtml(i18nT('todo.pinned'))}</span>` : '',
-    t.status === 'in_progress' ? `<span class="todo-badge progress">${iconSvg('flame')} ${escapeHtml(i18nT('todo.status.inProgress'))}</span>` : '',
-  ].filter(Boolean).join('');
 
   return `
     <div class="todo-item ${t.status === 'done' ? 'done' : t.status === 'in_progress' ? 'in-progress' : ''} ${pinned ? 'pinned' : ''}" data-id="${escapeHtmlAttr(String(t.id))}" data-status="${escapeHtml(t.status)}" draggable="true"
@@ -61,7 +57,6 @@ export function renderTodoItem(t) {
           <span class="todo-prio priority-dot" title="${escapeHtml(i18nT('todo.priority'))}" style="background:${prioColor}"></span>
           <div class="todo-title-wrap">
             <span class="todo-title">${escapeHtml(t.title)}</span>
-            ${badgeHtml ? `<div class="todo-badges">${badgeHtml}</div>` : ''}
             ${hasMeta ? `
             <div class="todo-meta-row">
               ${dueStr ? `<span class="todo-meta-chip todo-due ${isOverdue ? 'overdue' : dueTone}">${iconSvg('calendar')} ${dueStr}${isOverdue ? ` (${escapeHtml(i18nT('todo.overdue'))})` : ''}</span>` : ''}
@@ -97,6 +92,7 @@ export function renderTodoItem(t) {
           </div>
         </details>
         <button type="button" onclick='toggleTodoPin(${idArg})' class="todo-pin-btn ${pinned ? 'active' : ''}" title="${escapeHtml(pinned ? i18nT('todo.unpin') : i18nT('todo.pin'))}">${iconSvg('star')}</button>
+        <button type="button" onclick='duplicateTodo(${idArg})' title="${escapeHtml(i18nT('todo.duplicate'))}">${iconSvg('copy')}</button>
         <button type="button" onclick='deleteTodo(${idArg})' title="${escapeHtml(i18nT('common.delete'))}">${iconSvg('trash-2')}</button>
       </div>
     </div>
