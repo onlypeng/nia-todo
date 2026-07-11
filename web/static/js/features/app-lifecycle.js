@@ -67,7 +67,7 @@ export function createAppLifecycle({
     const retry = document.getElementById('boot-retry');
     if (subtitle) {
       subtitle.textContent = t('boot.startTimeout');
-      subtitle.title = error?.message || String(error || 'Boot timeout');
+      subtitle.title = error?.message || String(error || t('common.bootTimeout'));
     }
     if (spinner) spinner.style.display = 'none';
     if (retry) retry.style.display = '';

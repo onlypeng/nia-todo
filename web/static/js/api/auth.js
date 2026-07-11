@@ -4,7 +4,7 @@ import { getAuthHeaders, getJsonHeaders } from './http.js';
 import { apiErrorFromResponse } from './errors.js';
 import { t } from '../i18n/index.js';
 
-async function parseOrThrow(response, fallback = 'Request failed') {
+async function parseOrThrow(response, fallback = t('common.requestFailed')) {
   if (!response.ok) await apiErrorFromResponse(response, fallback);
   return response.json().catch(() => ({}));
 }

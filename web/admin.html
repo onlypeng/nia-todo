@@ -415,11 +415,11 @@ body { margin: 0; min-height: 100vh; background: var(--bg-primary); overflow-y: 
         <input type="url" id="instance-public-url" placeholder="https://todo.example.org" autocomplete="off">
       </div>
       <div class="admin-config-field full">
-        <label for="instance-allowed-origins">Allowed Origins / CORS</label>
+        <label for="instance-allowed-origins" data-i18n-key="admin.instance.allowedOrigins">Allowed Origins / CORS</label>
         <textarea id="instance-allowed-origins" class="admin-config-textarea" placeholder="https://todo.example.org&#10;https://todo-dev.example.org"></textarea>
       </div>
       <div class="admin-config-field full">
-        <label for="instance-trusted-proxies">Trusted Proxies</label>
+        <label for="instance-trusted-proxies" data-i18n-key="admin.instance.trustedProxies">Trusted Proxies</label>
         <textarea id="instance-trusted-proxies" class="admin-config-textarea" placeholder="10.0.10.14&#10;172.18.0.0/16"></textarea>
       </div>
     </div>
@@ -436,11 +436,11 @@ body { margin: 0; min-height: 100vh; background: var(--bg-primary); overflow-y: 
     <h2><span data-icon="mail"></span> <span data-i18n-key="admin.email.title">SMTP</span></h2>
     <div class="admin-config-grid">
       <div class="admin-config-field">
-        <label for="email-smtp-host">SMTP Host</label>
+        <label for="email-smtp-host" data-i18n-key="admin.email.smtpHost">SMTP Host</label>
         <input type="text" id="email-smtp-host" placeholder="smtp.example.org" autocomplete="off">
       </div>
       <div class="admin-config-field">
-        <label for="email-smtp-port">SMTP Port</label>
+        <label for="email-smtp-port" data-i18n-key="admin.email.smtpPort">SMTP Port</label>
         <input type="number" id="email-smtp-port" min="1" max="65535" value="587">
       </div>
       <div class="admin-config-field">
@@ -456,7 +456,7 @@ body { margin: 0; min-height: 100vh; background: var(--bg-primary); overflow-y: 
         <label for="email-smtp-auth-enabled" data-i18n-key="admin.email.useSmtpAuth">Use SMTP auth</label>
       </div>
       <div class="admin-config-field">
-        <label for="email-smtp-username">SMTP Username</label>
+        <label for="email-smtp-username" data-i18n-key="admin.email.smtpUsername">SMTP Username</label>
         <input type="text" id="email-smtp-username" autocomplete="off">
       </div>
       <div class="admin-config-field">
@@ -473,7 +473,7 @@ body { margin: 0; min-height: 100vh; background: var(--bg-primary); overflow-y: 
         <input type="text" id="email-from-name" placeholder="nia-todo" autocomplete="off">
       </div>
       <div class="admin-config-field">
-        <label for="email-reply-to">Reply-To optional</label>
+        <label for="email-reply-to" data-i18n-key="admin.email.replyTo">Reply-To optional</label>
         <input type="email" id="email-reply-to" placeholder="support@example.org" autocomplete="off">
       </div>
       <div class="admin-config-field">

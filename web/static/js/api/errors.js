@@ -47,7 +47,7 @@ function messageFromNormalizedError({ code, params, detail }, fallback) {
   return fallback;
 }
 
-export async function apiErrorFromResponse(response, fallback = 'Request failed') {
+export async function apiErrorFromResponse(response, fallback = t('common.requestFailed')) {
   const data = await response.json().catch(() => ({}));
   const normalized = normalizeApiErrorData(data, fallback);
   const message = messageFromNormalizedError(normalized, fallback);

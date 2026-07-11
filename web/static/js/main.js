@@ -8,7 +8,7 @@ function showBootError(error) {
   const retry = document.getElementById('boot-retry');
   if (subtitle) {
     subtitle.textContent = t('boot.loadError');
-    subtitle.title = error?.message || String(error || 'Import failed');
+    subtitle.title = error?.message || String(error || t('common.importFailed'));
   }
   if (spinner) spinner.style.display = 'none';
   if (retry) retry.style.display = '';

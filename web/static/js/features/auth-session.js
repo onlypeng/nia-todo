@@ -434,15 +434,15 @@ export function createAuthSessionFeature({
     const button = document.getElementById('login-reset-submit');
     const identifier = input?.value?.trim() || '';
     if (!identifier) {
-      messageEl.textContent = 'Please enter username or email.';
+      messageEl.textContent = t('auth.reset.identifierRequired');
       return;
     }
     if (button) button.disabled = true;
     try {
       const data = await authApi.requestPasswordReset(identifier);
-      messageEl.textContent = data.message || 'If an account matches, an email has been sent.';
+      messageEl.textContent = data.message || t('auth.reset.emailSent');
     } catch (e) {
-      messageEl.textContent = e.message || 'Reset could not be requested.';
+      messageEl.textContent = e.message || t('auth.reset.requestFailed');
     } finally {
       if (button) button.disabled = false;
     }
@@ -524,7 +524,7 @@ export function createAuthSessionFeature({
       window.dispatchEvent(new CustomEvent('nia-logged-in'));
     } catch (err) {
       console.error('Login failed:', err);
-      errorEl.textContent = err.message || 'Login failed';
+      errorEl.textContent = err.message || t('common.loginFailed');
     } finally {
       loginInProgress = false;
       if (submitBtn) submitBtn.disabled = false;

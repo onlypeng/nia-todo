@@ -6,26 +6,128 @@ on:
       - "main"
 
 jobs:
-  docker:
+  build-native:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc, aarch64-linux-android
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows installer (NSIS)
+        run: npx tauri build --target x86_64-pc-windows-msvc
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          build-tools: 34.0.0
+
+      - name: Build Android APK
+        run: npx tauri build --target aarch64-linux-android
+
+      - name: Get version from package.json
+        id: version
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare downloads directory
+        run: mkdir -p web/downloads
+
+      - name: Copy Windows installer
+        run: |
+          WIN_INSTALLER=$(find src-tauri/target/x86_64-pc-windows-msvc/release/bundle -name "*.exe" -type f 2>/dev/null | head -n 1)
+          if [ -n "$WIN_INSTALLER" ]; then
+            cp "$WIN_INSTALLER" "web/downloads/nia-todo-v${{ steps.version.outputs.VERSION }}-windows-x64-setup.exe"
+            echo "WINDOWS_FILE=nia-todo-v${{ steps.version.outputs.VERSION }}-windows-x64-setup.exe" >> "$GITHUB_OUTPUT"
+          fi
+        id: windows
+
+      - name: Copy Android APK
+        run: |
+          ANDROID_APK=$(find src-tauri/target/aarch64-linux-android/release/bundle -name "*.apk" -type f 2>/dev/null | head -n 1)
+          if [ -n "$ANDROID_APK" ]; then
+            cp "$ANDROID_APK" "web/downloads/nia-todo-v${{ steps.version.outputs.VERSION }}-android-arm64.apk"
+            echo "ANDROID_FILE=nia-todo-v${{ steps.version.outputs.VERSION }}-android-arm64.apk" >> "$GITHUB_OUTPUT"
+          fi
+        id: android
+
+      - name: Generate app-downloads.json
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          WIN_FILE="${{ steps.windows.outputs.WINDOWS_FILE }}"
+          ANDROID_FILE="${{ steps.android.outputs.ANDROID_FILE }}"
+          
+          cat > web/downloads/app-downloads.json << EOF
+          {
+            "version": "${VERSION}",
+            "latest": {
+              "windows": {
+                "platform": "windows",
+                "arch": "x64",
+                "url": "/downloads/${WIN_FILE}",
+                "filename": "${WIN_FILE}",
+                "sha256": "$(sha256sum "web/downloads/${WIN_FILE}" 2>/dev/null | cut -d' ' -f1 || echo '')",
+                "size_bytes": $(stat -c%s "web/downloads/${WIN_FILE}" 2>/dev/null || echo 0)
+              },
+              "android": {
+                "platform": "android",
+                "arch": "arm64",
+                "url": "/downloads/${ANDROID_FILE}",
+                "filename": "${ANDROID_FILE}",
+                "sha256": "$(sha256sum "web/downloads/${ANDROID_FILE}" 2>/dev/null | cut -d' ' -f1 || echo '')",
+                "size_bytes": $(stat -c%s "web/downloads/${ANDROID_FILE}" 2>/dev/null || echo 0)
+              }
+            },
+            "apps": []
+          }
+          EOF
+          cat web/downloads/app-downloads.json
+
+      - name: List downloads directory
+        run: ls -la web/downloads/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-artifacts
+          path: web/downloads/
+
+  docker:
+    needs: build-native
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: native-artifacts
+          path: web/downloads/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ vars.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PAT }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver: cloud
-          endpoint: "onlypeng/nia-todo"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          tags: "${{ vars.DOCKER_USER }}/docker-build-cloud-demo:latest"
-          # For pull requests, export results to the build cache.
-          # Otherwise, push to a registry.
-          outputs: ${{ github.event_name == 'pull_request' && 'type=cacheonly' || 'type=registry' }}
-  
+          context: .
+          push: true
+          tags: "${{ vars.DOCKER_USER }}/nia-todo:latest"
