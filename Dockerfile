@@ -1,3 +1,11 @@
+FROM python:3.13.5-slim AS builder
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip wheel -w /wheelhouse -r requirements.txt
+
+
 FROM python:3.13.5-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -9,8 +17,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+COPY --from=builder /wheelhouse ./wheelhouse
 COPY requirements.txt ./
-COPY wheelhouse ./wheelhouse
 RUN pip install --no-cache-dir --no-index --find-links=wheelhouse -r requirements.txt \
     && rm -rf wheelhouse
 
