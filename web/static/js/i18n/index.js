@@ -1,5 +1,5 @@
 const LANGUAGE_STORAGE_KEY = 'nia-todo-language';
-const SUPPORTED_LANGUAGES = ['de', 'en'];
+const SUPPORTED_LANGUAGES = ['de', 'en', 'zh'];
 const DEFAULT_LANGUAGE = 'en';
 const dictionaries = new Map();
 let activeLanguage = DEFAULT_LANGUAGE;

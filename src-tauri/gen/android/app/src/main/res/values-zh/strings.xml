@@ -1,0 +1,4 @@
+<resources>
+    <string name="location_reminder_fallback_title">位置提醒</string>
+    <string name="location_reminder_fallback_body">待办提醒</string>
+</resources>
