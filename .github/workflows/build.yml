@@ -7,7 +7,52 @@ on:
       - "test"
 
 jobs:
-  build-native:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows installer (NSIS)
+        run: npx tauri build
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare downloads directory
+        shell: bash
+        run: mkdir -p web/downloads
+
+      - name: Copy Windows installer
+        shell: bash
+        run: |
+          WIN_INSTALLER=$(find src-tauri/target/release/bundle -name "*.exe" -type f 2>/dev/null | head -n 1)
+          if [ -n "$WIN_INSTALLER" ]; then
+            cp "$WIN_INSTALLER" "web/downloads/nia-todo-v${{ steps.version.outputs.VERSION }}-windows-x64-setup.exe"
+            echo "WINDOWS_FILE=nia-todo-v${{ steps.version.outputs.VERSION }}-windows-x64-setup.exe" >> "$GITHUB_OUTPUT"
+          fi
+        id: windows
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: web/downloads/
+
+  build-android:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,38 +66,38 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc, aarch64-linux-android
+          targets: aarch64-linux-android
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
 
-      - name: Build Windows installer (NSIS)
-        run: npx tauri build --target x86_64-pc-windows-msvc
-
-      - name: Install Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           api-level: 34
           build-tools: 34.0.0
 
+      - name: Set up Android NDK
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.0.12077973" || true
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Build Android APK
         run: npx tauri build --target aarch64-linux-android
 
-      - name: Get version from package.json
+      - name: Get version
         id: version
         run: echo "VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Prepare downloads directory
         run: mkdir -p web/downloads
-
-      - name: Copy Windows installer
-        run: |
-          WIN_INSTALLER=$(find src-tauri/target/x86_64-pc-windows-msvc/release/bundle -name "*.exe" -type f 2>/dev/null | head -n 1)
-          if [ -n "$WIN_INSTALLER" ]; then
-            cp "$WIN_INSTALLER" "web/downloads/nia-todo-v${{ steps.version.outputs.VERSION }}-windows-x64-setup.exe"
-            echo "WINDOWS_FILE=nia-todo-v${{ steps.version.outputs.VERSION }}-windows-x64-setup.exe" >> "$GITHUB_OUTPUT"
-          fi
-        id: windows
 
       - name: Copy Android APK
         run: |
@@ -63,12 +108,47 @@ jobs:
           fi
         id: android
 
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-artifacts
+          path: web/downloads/
+
+  docker:
+    needs: [build-windows, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare downloads directory
+        run: mkdir -p web/downloads
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-artifacts
+          path: web/downloads/
+
+      - name: Download Android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android-artifacts
+          path: web/downloads/
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
       - name: Generate app-downloads.json
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
-          WIN_FILE="${{ steps.windows.outputs.WINDOWS_FILE }}"
-          ANDROID_FILE="${{ steps.android.outputs.ANDROID_FILE }}"
-          
+          WIN_FILE="nia-todo-v${VERSION}-windows-x64-setup.exe"
+          ANDROID_FILE="nia-todo-v${VERSION}-android-arm64.apk"
+          WIN_SHA=$(sha256sum "web/downloads/${WIN_FILE}" 2>/dev/null | cut -d' ' -f1 || echo '')
+          ANDROID_SHA=$(sha256sum "web/downloads/${ANDROID_FILE}" 2>/dev/null | cut -d' ' -f1 || echo '')
+          WIN_SIZE=$(stat -c%s "web/downloads/${WIN_FILE}" 2>/dev/null || echo 0)
+          ANDROID_SIZE=$(stat -c%s "web/downloads/${ANDROID_FILE}" 2>/dev/null || echo 0)
           cat > web/downloads/app-downloads.json << EOF
           {
             "version": "${VERSION}",
@@ -78,16 +158,16 @@ jobs:
                 "arch": "x64",
                 "url": "/downloads/${WIN_FILE}",
                 "filename": "${WIN_FILE}",
-                "sha256": "$(sha256sum "web/downloads/${WIN_FILE}" 2>/dev/null | cut -d' ' -f1 || echo '')",
-                "size_bytes": $(stat -c%s "web/downloads/${WIN_FILE}" 2>/dev/null || echo 0)
+                "sha256": "${WIN_SHA}",
+                "size_bytes": ${WIN_SIZE}
               },
               "android": {
                 "platform": "android",
                 "arch": "arm64",
                 "url": "/downloads/${ANDROID_FILE}",
                 "filename": "${ANDROID_FILE}",
-                "sha256": "$(sha256sum "web/downloads/${ANDROID_FILE}" 2>/dev/null | cut -d' ' -f1 || echo '')",
-                "size_bytes": $(stat -c%s "web/downloads/${ANDROID_FILE}" 2>/dev/null || echo 0)
+                "sha256": "${ANDROID_SHA}",
+                "size_bytes": ${ANDROID_SIZE}
               }
             },
             "apps": []
@@ -97,25 +177,6 @@ jobs:
 
       - name: List downloads directory
         run: ls -la web/downloads/
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-artifacts
-          path: web/downloads/
-
-  docker:
-    needs: build-native
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download native artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: native-artifacts
-          path: web/downloads/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
