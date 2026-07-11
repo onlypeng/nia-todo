@@ -34,6 +34,7 @@
     "copyright": "Copyright © 2026 Tobias Kneidl",
     "targets": ["nsis", "msi"],
     "icon": [
+      "icons/icon.ico",
       "../web/static/icons/icon-192.png",
       "../web/static/icons/icon-512.png"
     ],
