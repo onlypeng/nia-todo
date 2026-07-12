@@ -3346,6 +3346,71 @@ input[type="color"]::-moz-color-swatch {
   -webkit-mask-image: url('/static/icons/platform/linux.svg');
 }
 
+.app-download-icon-macos {
+  mask-image: url('/static/icons/platform/macos.svg');
+  -webkit-mask-image: url('/static/icons/platform/macos.svg');
+}
+
+/* 多变体分组：同一平台有多个安装包格式时 */
+.app-download-group {
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 10px;
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.02));
+}
+
+.app-download-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+}
+
+.app-download-group-header .app-download-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.app-download-group-label {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text-primary, #333);
+}
+
+.app-download-variants {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.app-download-variant {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border-color, #e0e0e0);
+  text-decoration: none;
+  color: var(--text-primary, #333);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.app-download-variant:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  border-color: var(--accent-color, #4a90d9);
+}
+
+.app-download-variant-label {
+  font-weight: 500;
+  font-size: 14px;
+}
+
 .app-downloads-modal-content {
   max-width: 640px;
   text-align: center;

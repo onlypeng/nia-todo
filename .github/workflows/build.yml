@@ -28,6 +28,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify version sync
+        run: python3 scripts/sync-version.py
+
       - name: Extract metadata
         id: meta
         run: |
@@ -91,22 +94,33 @@ jobs:
         shell: bash
         run: mkdir -p web/downloads
 
-      - name: Copy Windows installer
+      - name: Copy Windows installer (NSIS + MSI)
         shell: bash
         run: |
-          # 优先查找 NSIS 安装包（非 MSI bootstrap exe）
-          WIN_INSTALLER=$(find src-tauri/target/release/bundle/nsis -name "*_x64-setup.exe" -type f 2>/dev/null | head -n 1)
-          if [ -z "$WIN_INSTALLER" ]; then
-            # 回退：查找 bundle 目录下任意 setup exe
-            WIN_INSTALLER=$(find src-tauri/target/release/bundle -name "*-setup.exe" -type f 2>/dev/null | head -n 1)
+          # NSIS 安装包
+          WIN_NSIS=$(find src-tauri/target/release/bundle/nsis -name "*_x64-setup.exe" -type f 2>/dev/null | head -n 1)
+          if [ -z "$WIN_NSIS" ]; then
+            WIN_NSIS=$(find src-tauri/target/release/bundle -name "*-setup.exe" -type f 2>/dev/null | head -n 1)
           fi
-          if [ -z "$WIN_INSTALLER" ]; then
-            echo "::error::未找到 Windows 安装包"
+          if [ -z "$WIN_NSIS" ]; then
+            echo "::error::未找到 Windows NSIS 安装包"
             ls -R src-tauri/target/release/bundle/ 2>/dev/null || true
             exit 1
           fi
-          cp "$WIN_INSTALLER" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-windows-x64-setup.exe"
-          echo "Copied: $WIN_INSTALLER"
+          cp "$WIN_NSIS" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-windows-x64-setup.exe"
+          echo "Copied NSIS: $WIN_NSIS"
+
+          # MSI 安装包
+          WIN_MSI=$(find src-tauri/target/release/bundle/msi -name "*.msi" -type f 2>/dev/null | head -n 1)
+          if [ -n "$WIN_MSI" ]; then
+            cp "$WIN_MSI" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-windows-x64-setup.msi"
+            echo "Copied MSI: $WIN_MSI"
+          else
+            echo "::warning::未找到 Windows MSI 安装包（非致命）"
+          fi
+
+          echo "=== Windows artifacts ==="
+          ls -lah web/downloads/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -414,116 +428,115 @@ jobs:
       - name: Verify artifacts
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
-          WIN_FILE="nia-todo-v${VERSION}-windows-x64-setup.exe"
-          ANDROID_FILE="nia-todo-v${VERSION}-android-arm64.apk"
-          LINUX_FILE="nia-todo-v${VERSION}-linux-x64.AppImage"
-          echo "Expected files: ${WIN_FILE}, ${ANDROID_FILE}, ${LINUX_FILE}"
-          for f in "$WIN_FILE" "$ANDROID_FILE" "$LINUX_FILE"; do
+          # 必需的安装包（缺失则失败）
+          REQUIRED_FILES=(
+            "nia-todo-v${VERSION}-windows-x64-setup.exe"
+            "nia-todo-v${VERSION}-android-arm64.apk"
+            "nia-todo-v${VERSION}-linux-x64.AppImage"
+          )
+          # 可选的安装包（缺失只警告）
+          OPTIONAL_FILES=(
+            "nia-todo-v${VERSION}-windows-x64-setup.msi"
+            "nia-todo-v${VERSION}-linux-x64.deb"
+          )
+          echo "=== Required artifacts ==="
+          for f in "${REQUIRED_FILES[@]}"; do
             if [ ! -f "web/downloads/$f" ]; then
               echo "::error::缺少构建产物: $f"
               ls -la web/downloads/ || true
               exit 1
             fi
+            echo "  OK: $f ($(du -h "web/downloads/$f" | cut -f1))"
           done
-          echo "All artifacts verified"
+          echo "=== Optional artifacts ==="
+          for f in "${OPTIONAL_FILES[@]}"; do
+            if [ -f "web/downloads/$f" ]; then
+              echo "  OK: $f ($(du -h "web/downloads/$f" | cut -f1))"
+            else
+              echo "  SKIP: $f (not built)"
+            fi
+          done
+          echo "All required artifacts verified"
 
       - name: Generate app-downloads.json
         env:
           APP_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          WIN_FILE="nia-todo-v${APP_VERSION}-windows-x64-setup.exe"
-          ANDROID_FILE="nia-todo-v${APP_VERSION}-android-arm64.apk"
-          LINUX_FILE="nia-todo-v${APP_VERSION}-linux-x64.AppImage"
-          export WIN_FILE ANDROID_FILE LINUX_FILE
-          export WIN_SHA=$(sha256sum "web/downloads/${WIN_FILE}" | cut -d' ' -f1)
-          export ANDROID_SHA=$(sha256sum "web/downloads/${ANDROID_FILE}" | cut -d' ' -f1)
-          export LINUX_SHA=$(sha256sum "web/downloads/${LINUX_FILE}" | cut -d' ' -f1)
-          export WIN_SIZE=$(stat -c%s "web/downloads/${WIN_FILE}")
-          export ANDROID_SIZE=$(stat -c%s "web/downloads/${ANDROID_FILE}")
-          export LINUX_SIZE=$(stat -c%s "web/downloads/${LINUX_FILE}")
           python3 <<'PYEOF'
-          import json, os, re, sys
+          import json, os, re, sys, hashlib, pathlib
 
           version = os.environ['APP_VERSION']
-          win_file = os.environ['WIN_FILE']
-          android_file = os.environ['ANDROID_FILE']
-          linux_file = os.environ['LINUX_FILE']
-          win_sha = os.environ['WIN_SHA']
-          android_sha = os.environ['ANDROID_SHA']
-          linux_sha = os.environ['LINUX_SHA']
-          win_size = int(os.environ['WIN_SIZE'])
-          android_size = int(os.environ['ANDROID_SIZE'])
-          linux_size = int(os.environ['LINUX_SIZE'])
+          downloads_dir = pathlib.Path('web/downloads')
 
-          # Validate version format
+          # 校验版本号格式
           version_re = re.compile(r'^v?\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?$')
           if not version_re.match(version):
-              print(f'ERROR: version "{version}" does not match required format', file=sys.stderr)
+              print(f'ERROR: version "{version}" 格式无效', file=sys.stderr)
               sys.exit(1)
 
-          # Validate sha256
-          sha_re = re.compile(r'^[a-f0-9]{64}$')
-          for name, sha in [('windows', win_sha), ('android', android_sha), ('linux', linux_sha)]:
-              if not sha_re.match(sha):
-                  print(f'ERROR: {name} sha256 "{sha}" is not 64 hex chars', file=sys.stderr)
-                  sys.exit(1)
-
-          # Validate filenames
           version_slug = version.lstrip('v')
-          expected_win = f'nia-todo-v{version_slug}-windows-x64-setup.exe'
-          expected_android = f'nia-todo-v{version_slug}-android-arm64.apk'
-          expected_linux = f'nia-todo-v{version_slug}-linux-x64.AppImage'
-          for name, f, expected in [
-              ('windows', win_file, expected_win),
-              ('android', android_file, expected_android),
-              ('linux', linux_file, expected_linux),
-          ]:
-              if f != expected:
-                  print(f'ERROR: {name} filename "{f}" != expected "{expected}"', file=sys.stderr)
+          sha_re = re.compile(r'^[a-f0-9]{64}$')
+
+          # 定义所有可能的安装包（platform, variant, arch, suffix, label, required）
+          ARTIFACTS = [
+              ('windows', 'nsis', 'x64', '-windows-x64-setup.exe', 'NSIS Setup (.exe)', True),
+              ('windows', 'msi',   'x64', '-windows-x64-setup.msi', 'MSI Installer (.msi)', False),
+              ('android', 'apk',   'arm64', '-android-arm64.apk', 'APK (arm64-v8a)', True),
+              ('linux',   'appimage', 'x64', '-linux-x64.AppImage', 'AppImage', True),
+              ('linux',   'deb',   'x64', '-linux-x64.deb', 'Debian (.deb)', False),
+              ('macos',   'dmg',   'arm64', '-macos-arm64.dmg', 'DMG', False),
+          ]
+
+          apps = []
+          for platform, variant, arch, suffix, label, required in ARTIFACTS:
+              filename = f'nia-todo-v{version_slug}{suffix}'
+              filepath = downloads_dir / filename
+              if not filepath.exists():
+                  if required:
+                      print(f'ERROR: 必需的安装包不存在: {filename}', file=sys.stderr)
+                      sys.exit(1)
+                  print(f'SKIP: {filename} (可选，未构建)')
+                  continue
+
+              # 计算 SHA256 和大小
+              sha256 = hashlib.sha256(filepath.read_bytes()).hexdigest()
+              size_bytes = filepath.stat().st_size
+
+              if not sha_re.match(sha256):
+                  print(f'ERROR: {platform}/{variant} sha256 无效: {sha256}', file=sys.stderr)
+                  sys.exit(1)
+              if size_bytes <= 0:
+                  print(f'ERROR: {platform}/{variant} size_bytes 无效: {size_bytes}', file=sys.stderr)
                   sys.exit(1)
 
-          # Validate sizes
-          for name, size in [('windows', win_size), ('android', android_size), ('linux', linux_size)]:
-              if not isinstance(size, int) or size <= 0:
-                  print(f'ERROR: {name} size_bytes {size} is not a positive integer', file=sys.stderr)
-                  sys.exit(1)
+              apps.append({
+                  'platform': platform,
+                  'arch': arch,
+                  'variant': variant,
+                  'label': label,
+                  'url': f'/downloads/{filename}',
+                  'filename': filename,
+                  'sha256': sha256,
+                  'size_bytes': size_bytes,
+                  'version': version,
+              })
+              print(f'OK: {platform}/{variant} -> {filename} ({size_bytes} bytes)')
+
+          # manifest.latest 包含每平台的第一个变体（主安装包）
+          # manifest.apps 包含所有变体（含主安装包和可选格式）
+          latest = {}
+          for app in apps:
+              if app['platform'] not in latest:
+                  latest[app['platform']] = app
 
           manifest = {
               'version': version,
-              'latest': {
-                  'windows': {
-                      'platform': 'windows',
-                      'arch': 'x64',
-                      'url': f'/downloads/{win_file}',
-                      'filename': win_file,
-                      'sha256': win_sha,
-                      'size_bytes': win_size,
-                      'version': version,
-                  },
-                  'android': {
-                      'platform': 'android',
-                      'arch': 'arm64',
-                      'url': f'/downloads/{android_file}',
-                      'filename': android_file,
-                      'sha256': android_sha,
-                      'size_bytes': android_size,
-                      'version': version,
-                  },
-                  'linux': {
-                      'platform': 'linux',
-                      'arch': 'x64',
-                      'url': f'/downloads/{linux_file}',
-                      'filename': linux_file,
-                      'sha256': linux_sha,
-                      'size_bytes': linux_size,
-                      'version': version,
-                  },
-              },
-              'apps': [],
+              'latest': latest,
+              'apps': apps,
           }
-          with open('web/downloads/app-downloads.json', 'w') as f:
+          with open(downloads_dir / 'app-downloads.json', 'w') as f:
               json.dump(manifest, f, indent=2)
-          print('app-downloads.json generated and validated successfully')
+          print(f'app-downloads.json generated: {len(apps)} artifacts across {len(latest)} platforms')
           PYEOF
           python3 -m json.tool web/downloads/app-downloads.json > /dev/null
           echo "--- Manifest content ---"
@@ -656,6 +669,7 @@ jobs:
             | 平台 | 文件 | 说明 |
             |------|------|------|
             | Windows | `nia-todo-v${{ needs.prepare.outputs.version }}-windows-x64-setup.exe` | NSIS 安装程序 |
+            | Windows | `nia-todo-v${{ needs.prepare.outputs.version }}-windows-x64-setup.msi` | MSI 安装程序 |
             | Android | `nia-todo-v${{ needs.prepare.outputs.version }}-android-arm64.apk` | APK 安装包 |
             | Linux 客户端 | `nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.AppImage` | AppImage 免安装 |
             | Linux 客户端 | `nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.deb` | Debian/Ubuntu 客户端包 |

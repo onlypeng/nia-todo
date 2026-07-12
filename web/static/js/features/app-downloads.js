@@ -33,6 +33,7 @@ function platformFromNativeRuntime() {
   if (RUNTIME_PLATFORM === 'android') return 'android';
   if (RUNTIME_PLATFORM === 'windows') return 'windows';
   if (RUNTIME_PLATFORM === 'linux') return 'linux';
+  if (RUNTIME_PLATFORM === 'macos') return 'macos';
   return RUNTIME_PLATFORM || 'unknown';
 }
 
@@ -42,23 +43,84 @@ async function getNativeAppVersion(nativeBridge) {
 
 const DOWNLOAD_SHA_RE = /^[a-f0-9]{64}$/;
 const DOWNLOAD_VERSION_RE = /^v?\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?$/;
+
+// 支持的所有平台定义。每个平台可包含多个变体（如 Windows 的 NSIS/MSI、Linux 的 AppImage/deb）。
+// platformId 用于前端识别当前运行平台；variantId 用于区分同一平台的不同安装包格式。
 const DOWNLOADS_BY_PLATFORM = {
   windows: {
     arch: 'x64',
-    filenameSuffix: '-windows-x64-setup.exe',
-    filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-windows-x64-setup\.exe$/,
+    iconClass: 'app-download-icon-windows',
+    label: 'Windows',
+    titleKey: 'appDownloads.windows',
+    variants: [
+      {
+        variantId: 'nsis',
+        label: 'NSIS Setup (.exe)',
+        filenameSuffix: '-windows-x64-setup.exe',
+        filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-windows-x64-setup\.exe$/,
+      },
+      {
+        variantId: 'msi',
+        label: 'MSI Installer (.msi)',
+        filenameSuffix: '-windows-x64-setup.msi',
+        filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-windows-x64-setup\.msi$/,
+      },
+    ],
   },
   android: {
     arch: 'arm64',
-    filenameSuffix: '-android-arm64.apk',
-    filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-android-arm64\.apk$/,
+    iconClass: 'app-download-icon-android',
+    label: 'Android',
+    titleKey: 'appDownloads.android',
+    variants: [
+      {
+        variantId: 'apk',
+        label: 'APK (arm64-v8a)',
+        filenameSuffix: '-android-arm64.apk',
+        filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-android-arm64\.apk$/,
+      },
+    ],
   },
   linux: {
     arch: 'x64',
-    filenameSuffix: '-linux-x64.AppImage',
-    filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-linux-x64\.AppImage$/,
+    iconClass: 'app-download-icon-linux',
+    label: 'Linux',
+    titleKey: 'appDownloads.linux',
+    variants: [
+      {
+        variantId: 'appimage',
+        label: 'AppImage',
+        filenameSuffix: '-linux-x64.AppImage',
+        filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-linux-x64\.AppImage$/,
+      },
+      {
+        variantId: 'deb',
+        label: 'Debian (.deb)',
+        filenameSuffix: '-linux-x64.deb',
+        filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-linux-x64\.deb$/,
+      },
+    ],
+  },
+  macos: {
+    arch: 'arm64',
+    iconClass: 'app-download-icon-macos',
+    label: 'macOS',
+    titleKey: 'appDownloads.macos',
+    variants: [
+      {
+        variantId: 'dmg',
+        label: 'DMG',
+        filenameSuffix: '-macos-arm64.dmg',
+        filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-macos-arm64\.dmg$/,
+      },
+    ],
   },
 };
+
+// 扁平化所有变体的查找表（用于校验 manifest 中的条目）
+const VARIANT_LOOKUP = Object.entries(DOWNLOADS_BY_PLATFORM).flatMap(([platform, spec]) =>
+  spec.variants.map((variant) => ({ platform, variant, spec }))
+);
 
 function absoluteDownloadUrl(url) {
   const base = RUNTIME_CAPABILITIES.native && API ? API : location.origin;
@@ -73,8 +135,8 @@ function filenameFromDownloadPath(pathname) {
 function validateDownloadEntry(app, fallbackVersion = '') {
   if (!app || typeof app !== 'object') return null;
   const platform = String(app.platform || '').toLowerCase();
-  const spec = DOWNLOADS_BY_PLATFORM[platform];
-  if (!spec) return null;
+  const platformSpec = DOWNLOADS_BY_PLATFORM[platform];
+  if (!platformSpec) return null;
 
   const rawUrl = String(app.url || '').trim();
   if (!rawUrl.startsWith('/downloads/')) return null;
@@ -87,20 +149,26 @@ function validateDownloadEntry(app, fallbackVersion = '') {
   if (parsed.origin !== location.origin || parsed.search || parsed.hash) return null;
 
   const filename = filenameFromDownloadPath(parsed.pathname);
-  if (!filename || filename.includes('/') || !spec.filenameRe.test(filename)) return null;
+  if (!filename || filename.includes('/')) return null;
+
+  // 查找匹配的变体（通过文件名正则）
+  const matchedVariant = platformSpec.variants.find((v) => v.filenameRe.test(filename));
+  if (!matchedVariant) return null;
+
   if (app.filename && String(app.filename) !== filename) return null;
-  if (app.arch && String(app.arch) !== spec.arch) return null;
+  if (app.arch && String(app.arch) !== platformSpec.arch) return null;
   if (!DOWNLOAD_SHA_RE.test(String(app.sha256 || ''))) return null;
 
   const version = String(app.version || fallbackVersion || '').trim();
   if (!DOWNLOAD_VERSION_RE.test(version)) return null;
   const versionSlug = normalizeVersion(version);
-  if (filename !== `nia-todo-v${versionSlug}${spec.filenameSuffix}`) return null;
+  if (filename !== `nia-todo-v${versionSlug}${matchedVariant.filenameSuffix}`) return null;
 
   return {
     platform,
-    arch: spec.arch,
-    label: app.label || (platform === 'windows' ? 'Windows Setup' : platform === 'android' ? 'Android APK' : platform === 'linux' ? 'Linux AppImage' : 'App'),
+    variant: matchedVariant.variantId,
+    arch: platformSpec.arch,
+    label: app.label || matchedVariant.label,
     version,
     filename,
     url: absoluteDownloadUrl(parsed.pathname),
@@ -111,39 +179,51 @@ function validateDownloadEntry(app, fallbackVersion = '') {
 
 function downloadsFromManifest(manifest) {
   const version = manifest?.version || manifest?.latest?.version || '';
-  const apps = [
-    manifest?.latest?.windows,
-    manifest?.latest?.android,
-    ...(Array.isArray(manifest?.apps) ? manifest.apps : []),
-  ].filter(Boolean);
+  // manifest.latest 可以是 { windows: {...}, android: {...}, ... }
+  // manifest.apps 是一个数组，可包含同一平台的多个变体
+  const latestApps = manifest?.latest
+    ? Object.values(manifest.latest).filter((v) => v && typeof v === 'object' && v.platform)
+    : [];
+  const apps = [...latestApps, ...(Array.isArray(manifest?.apps) ? manifest.apps : [])];
+
+  // 按 platform:variant 去重，保留第一个有效的
+  const seen = new Set();
   const byPlatform = new Map();
   for (const app of apps) {
     const download = validateDownloadEntry(app, version);
-    if (!download || byPlatform.has(download.platform)) continue;
-    byPlatform.set(download.platform, download);
+    if (!download) continue;
+    const key = `${download.platform}:${download.variant}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    // 每个平台保留一个数组（多变体）
+    if (!byPlatform.has(download.platform)) {
+      byPlatform.set(download.platform, []);
+    }
+    byPlatform.get(download.platform).push(download);
   }
-  return ['windows', 'android', 'linux'].map((platform) => byPlatform.get(platform)).filter(Boolean);
+
+  // 按平台优先级排序输出，每平台的变体也按定义顺序排序
+  const platformOrder = ['windows', 'android', 'linux', 'macos'];
+  return platformOrder
+    .map((platform) => byPlatform.get(platform))
+    .filter(Boolean)
+    .flat();
 }
 
 function platformIconClass(platform) {
-  if (platform === 'android') return 'app-download-icon-android';
-  if (platform === 'windows') return 'app-download-icon-windows';
-  if (platform === 'linux') return 'app-download-icon-linux';
-  return '';
+  return DOWNLOADS_BY_PLATFORM[platform]?.iconClass || '';
 }
 
 function platformTitle(download) {
-  if (download.platform === 'android') return 'Android-App herunterladen';
-  if (download.platform === 'windows') return 'Windows-App herunterladen';
-  if (download.platform === 'linux') return 'Linux-App herunterladen';
-  return `${download.label || 'App'} herunterladen`;
+  const spec = DOWNLOADS_BY_PLATFORM[download?.platform];
+  if (!spec) return `${download?.label || 'App'} herunterladen`;
+  const key = spec.titleKey;
+  return t(key, {}, `${spec.label} App herunterladen`);
 }
 
 function platformLabel(platform) {
-  if (platform === 'android') return 'Android';
-  if (platform === 'windows') return 'Windows';
-  if (platform === 'linux') return 'Linux';
-  return 'App';
+  return DOWNLOADS_BY_PLATFORM[platform]?.label || 'App';
 }
 
 function escapeHtml(value) {
@@ -301,38 +381,96 @@ function renderDownloads(target, downloads) {
     return;
   }
   target.replaceChildren();
+
+  // 按平台分组渲染
+  const grouped = new Map();
   for (const download of downloads) {
-    const link = document.createElement('a');
-    link.className = `app-download-button app-download-button-${download.platform}`;
-    link.href = download.url;
-    link.download = download.filename;
-    link.title = platformTitle(download);
+    if (!grouped.has(download.platform)) grouped.set(download.platform, []);
+    grouped.get(download.platform).push(download);
+  }
 
-    const icon = document.createElement('span');
-    const iconClass = platformIconClass(download.platform);
-    if (iconClass) {
-      icon.className = `app-download-icon ${iconClass}`;
-      icon.setAttribute('aria-hidden', 'true');
-    } else {
-      icon.innerHTML = iconSvg('download');
+  for (const [platform, platformDownloads] of grouped) {
+    const platformSpec = DOWNLOADS_BY_PLATFORM[platform];
+    if (!platformSpec) continue;
+
+    // 如果只有一个变体，直接渲染单个按钮（保持原有简洁样式）
+    if (platformDownloads.length === 1) {
+      const download = platformDownloads[0];
+      const link = document.createElement('a');
+      link.className = `app-download-button app-download-button-${platform}`;
+      link.href = download.url;
+      link.download = download.filename;
+      link.title = platformTitle(download);
+
+      const icon = document.createElement('span');
+      const iconClass = platformIconClass(platform);
+      if (iconClass) {
+        icon.className = `app-download-icon ${iconClass}`;
+        icon.setAttribute('aria-hidden', 'true');
+      } else {
+        icon.innerHTML = iconSvg('download');
+      }
+      link.appendChild(icon);
+
+      const text = document.createElement('span');
+      text.className = 'app-download-text';
+
+      const platformEl = document.createElement('span');
+      platformEl.className = 'app-download-platform';
+      platformEl.textContent = platformLabel(platform);
+      text.appendChild(platformEl);
+
+      const version = document.createElement('span');
+      version.className = 'app-download-version';
+      version.textContent = download.version || '';
+      text.appendChild(version);
+
+      link.appendChild(text);
+      target.appendChild(link);
+      continue;
     }
-    link.appendChild(icon);
 
-    const text = document.createElement('span');
-    text.className = 'app-download-text';
+    // 多变体：渲染分组卡片
+    const group = document.createElement('div');
+    group.className = `app-download-group app-download-group-${platform}`;
 
-    const platform = document.createElement('span');
-    platform.className = 'app-download-platform';
-    platform.textContent = platformLabel(download.platform);
-    text.appendChild(platform);
+    const header = document.createElement('div');
+    header.className = 'app-download-group-header';
+    const headerIcon = document.createElement('span');
+    const iconClass = platformIconClass(platform);
+    headerIcon.className = `app-download-icon ${iconClass}`;
+    headerIcon.setAttribute('aria-hidden', 'true');
+    header.appendChild(headerIcon);
+    const headerLabel = document.createElement('span');
+    headerLabel.className = 'app-download-group-label';
+    headerLabel.textContent = platformLabel(platform);
+    header.appendChild(headerLabel);
+    group.appendChild(header);
 
-    const version = document.createElement('span');
-    version.className = 'app-download-version';
-    version.textContent = download.version || '';
-    text.appendChild(version);
+    const variantsContainer = document.createElement('div');
+    variantsContainer.className = 'app-download-variants';
 
-    link.appendChild(text);
-    target.appendChild(link);
+    for (const download of platformDownloads) {
+      const link = document.createElement('a');
+      link.className = `app-download-button app-download-button-${platform} app-download-variant`;
+      link.href = download.url;
+      link.download = download.filename;
+      link.title = platformTitle(download);
+
+      const variantLabel = document.createElement('span');
+      variantLabel.className = 'app-download-variant-label';
+      variantLabel.textContent = download.label;
+      link.appendChild(variantLabel);
+
+      const version = document.createElement('span');
+      version.className = 'app-download-version';
+      version.textContent = download.version || '';
+      link.appendChild(version);
+
+      variantsContainer.appendChild(link);
+    }
+    group.appendChild(variantsContainer);
+    target.appendChild(group);
   }
   setDownloadTargetVisible(target, true);
 }

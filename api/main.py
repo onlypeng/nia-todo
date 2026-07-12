@@ -450,7 +450,7 @@ async def on_startup():
 
 # ─── Static Frontend ─────────────────────────────────────────────────────────
 
-from paths import AVATAR_DIR
+from paths import AVATAR_DIR, CUSTOM_DOWNLOADS_DIR
 
 AVATAR_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/api/avatars", StaticFiles(directory=str(AVATAR_DIR)), name="avatars")
@@ -464,19 +464,60 @@ if WEB_DIR.exists():
     @app.get("/downloads/app-downloads.json")
     @app.head("/downloads/app-downloads.json")
     def app_downloads_manifest():
+        import hashlib
+        import re
+
         manifest_path = DOWNLOADS_DIR / "app-downloads.json"
-        if not manifest_path.exists():
-            return JSONResponse(
-                {"version": "", "apps": []},
-                headers={
-                    "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0",
-                },
-            )
-        return FileResponse(
-            str(manifest_path),
-            media_type="application/json",
+        base_manifest = {"version": "", "latest": {}, "apps": []}
+        if manifest_path.exists():
+            try:
+                base_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # 合并自定义下载目录中的安装包
+        # 文件名必须匹配 nia-todo-v{version}-{platform}-{arch}{suffix} 格式
+        custom_apps = []
+        filename_re = re.compile(
+            r'^nia-todo-v(\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?)'
+            r'-(windows|android|linux|macos)-([a-z0-9]+)'
+            r'(-setup\.exe|-setup\.msi|\.apk|\.AppImage|\.deb|\.dmg)$',
+            re.IGNORECASE,
+        )
+
+        if CUSTOM_DOWNLOADS_DIR.exists():
+            for filepath in CUSTOM_DOWNLOADS_DIR.iterdir():
+                if not filepath.is_file():
+                    continue
+                match = filename_re.match(filepath.name)
+                if not match:
+                    continue
+                version, platform, arch, _suffix = match.groups()
+                # 检查是否已在 manifest 中（避免重复）
+                already_exists = any(
+                    app.get('filename') == filepath.name
+                    for app in (base_manifest.get('apps') or [])
+                )
+                if already_exists:
+                    continue
+
+                sha256 = hashlib.sha256(filepath.read_bytes()).hexdigest()
+                custom_apps.append({
+                    'platform': platform.lower(),
+                    'arch': arch,
+                    'url': f'/downloads/{filepath.name}',
+                    'filename': filepath.name,
+                    'sha256': sha256,
+                    'size_bytes': filepath.stat().st_size,
+                    'version': version,
+                    'label': f'Custom ({filepath.name})',
+                })
+
+        if custom_apps:
+            base_manifest.setdefault('apps', []).extend(custom_apps)
+
+        return JSONResponse(
+            base_manifest,
             headers={
                 "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
                 "Pragma": "no-cache",
@@ -484,7 +525,35 @@ if WEB_DIR.exists():
             },
         )
 
-    app.mount("/downloads", StaticFiles(directory=str(DOWNLOADS_DIR)), name="downloads")
+    # 下载文件提供：优先从 DOWNLOADS_DIR 提供，回退到 CUSTOM_DOWNLOADS_DIR
+    @app.get("/downloads/{filename:path}")
+    def serve_download(filename: str):
+        from fastapi.responses import FileResponse as FastApiFileResponse
+        import os.path
+
+        # 安全检查：防止路径遍历
+        if '..' in filename or '/' in filename:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Not found")
+
+        # 先在 CI 生成的下载目录中查找
+        primary = DOWNLOADS_DIR / filename
+        if primary.is_file():
+            return FastApiFileResponse(
+                str(primary),
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+
+        # 再在自定义下载目录中查找
+        custom = CUSTOM_DOWNLOADS_DIR / filename
+        if custom.is_file():
+            return FastApiFileResponse(
+                str(custom),
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Not found")
 
     @app.get("/.well-known/assetlinks.json")
     @app.head("/.well-known/assetlinks.json")
