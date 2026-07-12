@@ -8,7 +8,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${1:-$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")"
+VERSION="${1:-}"
+if [ -z "$VERSION" ]; then
+  VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+fi
 PKG_NAME="nia-todo-server"
 DEB_NAME="nia-todo-server-v${VERSION}-full.deb"
 BUILD_DIR=$(mktemp -d)
@@ -72,7 +75,7 @@ cp packaging/systemd/nia-todo-backup.service "${DEBROOT}/lib/systemd/system/nia-
 cp packaging/systemd/nia-todo-backup.timer "${DEBROOT}/lib/systemd/system/nia-todo-backup.timer"
 
 # ── sudoers for server update ────────────────
-cat > "${DEBROOT}/etc/sudoers.d/nia-todo-server-update" <<SUDOERS
+cat > "${DEBROOT}/etc/sudoers.d/nia-todo-server-update" <<'SUDOERS'
 nia-todo ALL=(root) NOPASSWD: /usr/local/bin/nia-todo-server-update ""
 SUDOERS
 chmod 440 "${DEBROOT}/etc/sudoers.d/nia-todo-server-update"
