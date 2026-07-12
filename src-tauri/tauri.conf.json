@@ -32,7 +32,7 @@
     "active": true,
     "publisher": "Tobias Kneidl",
     "copyright": "Copyright © 2026 Tobias Kneidl",
-    "targets": ["nsis", "msi"],
+    "targets": ["nsis", "msi", "deb", "appimage"],
     "icon": [
       "icons/icon.ico",
       "../web/static/icons/icon-192.png",

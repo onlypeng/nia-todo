@@ -85,7 +85,7 @@ jobs:
         run: npm ci
 
       - name: Build Windows installer (NSIS)
-        run: npx tauri build
+        run: npx tauri build --bundles nsis
 
       - name: Prepare downloads directory
         shell: bash
@@ -207,6 +207,98 @@ jobs:
           retention-days: 7
 
   # ─────────────────────────────────────────────
+  # Linux 客户端构建（AppImage + deb）
+  # ─────────────────────────────────────────────
+  build-linux:
+    needs: prepare
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: rust-linux-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: rust-linux-
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Linux AppImage and deb
+        run: npx tauri build --bundles appimage,deb
+
+      - name: Prepare downloads directory
+        run: mkdir -p web/downloads
+
+      - name: Copy Linux AppImage
+        run: |
+          APPIMAGE=$(find src-tauri/target/release/bundle -name "*.AppImage" -type f 2>/dev/null | head -n 1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "::error::未找到 AppImage"
+            find src-tauri/target/release/bundle/ -type f 2>/dev/null || true
+            exit 1
+          fi
+          cp "$APPIMAGE" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.AppImage"
+          echo "Copied: $APPIMAGE"
+
+      - name: Copy Linux deb (client)
+        run: |
+          LINUX_DEB=$(find src-tauri/target/release/bundle/deb -name "*.deb" -type f 2>/dev/null | head -n 1)
+          if [ -n "$LINUX_DEB" ]; then
+            cp "$LINUX_DEB" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.deb"
+            echo "Copied: $LINUX_DEB"
+          else
+            echo "No Linux client deb found (non-fatal)"
+          fi
+
+      - name: Report artifact sizes
+        run: |
+          echo "=== Linux client artifact sizes ==="
+          ls -lah web/downloads/
+          echo ""
+          echo "=== Size comparison ==="
+          APPIMAGE="web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.AppImage"
+          if [ -f "$APPIMAGE" ]; then
+            echo "AppImage: $(du -h "$APPIMAGE" | cut -f1)"
+          fi
+          DEB="web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.deb"
+          if [ -f "$DEB" ]; then
+            echo "deb: $(du -h "$DEB" | cut -f1)"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts${{ needs.prepare.outputs.artifact_suffix }}
+          path: web/downloads/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
   # Linux 服务器端 deb 包构建
   # ─────────────────────────────────────────────
   build-deb:
@@ -265,7 +357,7 @@ jobs:
   # Docker 镜像构建与推送
   # ─────────────────────────────────────────────
   docker:
-    needs: [prepare, build-windows, build-android]
+    needs: [prepare, build-windows, build-android, build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -286,13 +378,20 @@ jobs:
           name: android-artifacts${{ needs.prepare.outputs.artifact_suffix }}
           path: web/downloads/
 
+      - name: Download Linux client artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-artifacts${{ needs.prepare.outputs.artifact_suffix }}
+          path: web/downloads/
+
       - name: Verify artifacts
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
           WIN_FILE="nia-todo-v${VERSION}-windows-x64-setup.exe"
           ANDROID_FILE="nia-todo-v${VERSION}-android-arm64.apk"
-          echo "Expected files: ${WIN_FILE}, ${ANDROID_FILE}"
-          for f in "$WIN_FILE" "$ANDROID_FILE"; do
+          LINUX_FILE="nia-todo-v${VERSION}-linux-x64.AppImage"
+          echo "Expected files: ${WIN_FILE}, ${ANDROID_FILE}, ${LINUX_FILE}"
+          for f in "$WIN_FILE" "$ANDROID_FILE" "$LINUX_FILE"; do
             if [ ! -f "web/downloads/$f" ]; then
               echo "::error::缺少构建产物: $f"
               ls -la web/downloads/ || true
@@ -307,21 +406,27 @@ jobs:
         run: |
           WIN_FILE="nia-todo-v${APP_VERSION}-windows-x64-setup.exe"
           ANDROID_FILE="nia-todo-v${APP_VERSION}-android-arm64.apk"
-          export WIN_FILE ANDROID_FILE
+          LINUX_FILE="nia-todo-v${APP_VERSION}-linux-x64.AppImage"
+          export WIN_FILE ANDROID_FILE LINUX_FILE
           export WIN_SHA=$(sha256sum "web/downloads/${WIN_FILE}" | cut -d' ' -f1)
           export ANDROID_SHA=$(sha256sum "web/downloads/${ANDROID_FILE}" | cut -d' ' -f1)
+          export LINUX_SHA=$(sha256sum "web/downloads/${LINUX_FILE}" | cut -d' ' -f1)
           export WIN_SIZE=$(stat -c%s "web/downloads/${WIN_FILE}")
           export ANDROID_SIZE=$(stat -c%s "web/downloads/${ANDROID_FILE}")
+          export LINUX_SIZE=$(stat -c%s "web/downloads/${LINUX_FILE}")
           python3 <<'PYEOF'
           import json, os, re, sys
 
           version = os.environ['APP_VERSION']
           win_file = os.environ['WIN_FILE']
           android_file = os.environ['ANDROID_FILE']
+          linux_file = os.environ['LINUX_FILE']
           win_sha = os.environ['WIN_SHA']
           android_sha = os.environ['ANDROID_SHA']
+          linux_sha = os.environ['LINUX_SHA']
           win_size = int(os.environ['WIN_SIZE'])
           android_size = int(os.environ['ANDROID_SIZE'])
+          linux_size = int(os.environ['LINUX_SIZE'])
 
           # Validate version format
           version_re = re.compile(r'^v?\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?$')
@@ -331,7 +436,7 @@ jobs:
 
           # Validate sha256
           sha_re = re.compile(r'^[a-f0-9]{64}$')
-          for name, sha in [('windows', win_sha), ('android', android_sha)]:
+          for name, sha in [('windows', win_sha), ('android', android_sha), ('linux', linux_sha)]:
               if not sha_re.match(sha):
                   print(f'ERROR: {name} sha256 "{sha}" is not 64 hex chars', file=sys.stderr)
                   sys.exit(1)
@@ -340,15 +445,18 @@ jobs:
           version_slug = version.lstrip('v')
           expected_win = f'nia-todo-v{version_slug}-windows-x64-setup.exe'
           expected_android = f'nia-todo-v{version_slug}-android-arm64.apk'
-          if win_file != expected_win:
-              print(f'ERROR: windows filename "{win_file}" != expected "{expected_win}"', file=sys.stderr)
-              sys.exit(1)
-          if android_file != expected_android:
-              print(f'ERROR: android filename "{android_file}" != expected "{expected_android}"', file=sys.stderr)
-              sys.exit(1)
+          expected_linux = f'nia-todo-v{version_slug}-linux-x64.AppImage'
+          for name, f, expected in [
+              ('windows', win_file, expected_win),
+              ('android', android_file, expected_android),
+              ('linux', linux_file, expected_linux),
+          ]:
+              if f != expected:
+                  print(f'ERROR: {name} filename "{f}" != expected "{expected}"', file=sys.stderr)
+                  sys.exit(1)
 
           # Validate sizes
-          for name, size in [('windows', win_size), ('android', android_size)]:
+          for name, size in [('windows', win_size), ('android', android_size), ('linux', linux_size)]:
               if not isinstance(size, int) or size <= 0:
                   print(f'ERROR: {name} size_bytes {size} is not a positive integer', file=sys.stderr)
                   sys.exit(1)
@@ -372,6 +480,15 @@ jobs:
                       'filename': android_file,
                       'sha256': android_sha,
                       'size_bytes': android_size,
+                      'version': version,
+                  },
+                  'linux': {
+                      'platform': 'linux',
+                      'arch': 'x64',
+                      'url': f'/downloads/{linux_file}',
+                      'filename': linux_file,
+                      'sha256': linux_sha,
+                      'size_bytes': linux_size,
                       'version': version,
                   },
               },
@@ -420,7 +537,7 @@ jobs:
   # GitHub Release 发布（仅 main 分支）
   # ─────────────────────────────────────────────
   release:
-    needs: [prepare, build-windows, build-android, build-deb, docker]
+    needs: [prepare, build-windows, build-android, build-linux, build-deb, docker]
     if: ${{ needs.prepare.outputs.is_main == 'true' }}
     runs-on: ubuntu-latest
     permissions:
@@ -442,6 +559,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: android-artifacts
+          path: release-assets/
+
+      - name: Download Linux client artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-artifacts
           path: release-assets/
 
       - name: Download deb artifacts
@@ -507,6 +630,8 @@ jobs:
             |------|------|------|
             | Windows | `nia-todo-v${{ needs.prepare.outputs.version }}-windows-x64-setup.exe` | NSIS 安装程序 |
             | Android | `nia-todo-v${{ needs.prepare.outputs.version }}-android-arm64.apk` | APK 安装包 |
+            | Linux 客户端 | `nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.AppImage` | AppImage 免安装 |
+            | Linux 客户端 | `nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.deb` | Debian/Ubuntu 客户端包 |
             | Linux 服务器 | `nia-todo-server-v${{ needs.prepare.outputs.version }}-full.deb` | Debian/Ubuntu 服务器包 |
 
             ### Docker
@@ -526,10 +651,11 @@ jobs:
 
             ### 安装
 
-            - **Debian/Ubuntu**: `sudo apt install ./nia-todo-server-v${{ needs.prepare.outputs.version }}-full.deb`
-            - **Docker**: 见 [README](README.md#-docker)
             - **Windows**: 双击 `.exe` 安装
             - **Android**: 安装 `.apk` 文件
+            - **Linux 客户端**: `chmod +x *.AppImage && ./nia-todo-*.AppImage` 或 `sudo apt install ./nia-todo-v*-linux-x64.deb`
+            - **Linux 服务器**: `sudo apt install ./nia-todo-server-v*-full.deb`
+            - **Docker**: 见 [README](README.md#-docker)
 
             ---
             Full changelog: https://github.com/${{ github.repository }}/commits

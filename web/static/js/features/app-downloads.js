@@ -32,6 +32,7 @@ function platformFromNativeRuntime() {
   if (!RUNTIME_CAPABILITIES.nativeAppVersion) return '';
   if (RUNTIME_PLATFORM === 'android') return 'android';
   if (RUNTIME_PLATFORM === 'windows') return 'windows';
+  if (RUNTIME_PLATFORM === 'linux') return 'linux';
   return RUNTIME_PLATFORM || 'unknown';
 }
 
@@ -51,6 +52,11 @@ const DOWNLOADS_BY_PLATFORM = {
     arch: 'arm64',
     filenameSuffix: '-android-arm64.apk',
     filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-android-arm64\.apk$/,
+  },
+  linux: {
+    arch: 'x64',
+    filenameSuffix: '-linux-x64.AppImage',
+    filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-linux-x64\.AppImage$/,
   },
 };
 
@@ -94,7 +100,7 @@ function validateDownloadEntry(app, fallbackVersion = '') {
   return {
     platform,
     arch: spec.arch,
-    label: app.label || (platform === 'windows' ? 'Windows Setup' : 'Android APK'),
+    label: app.label || (platform === 'windows' ? 'Windows Setup' : platform === 'android' ? 'Android APK' : platform === 'linux' ? 'Linux AppImage' : 'App'),
     version,
     filename,
     url: absoluteDownloadUrl(parsed.pathname),
@@ -116,24 +122,27 @@ function downloadsFromManifest(manifest) {
     if (!download || byPlatform.has(download.platform)) continue;
     byPlatform.set(download.platform, download);
   }
-  return ['windows', 'android'].map((platform) => byPlatform.get(platform)).filter(Boolean);
+  return ['windows', 'android', 'linux'].map((platform) => byPlatform.get(platform)).filter(Boolean);
 }
 
 function platformIconClass(platform) {
   if (platform === 'android') return 'app-download-icon-android';
   if (platform === 'windows') return 'app-download-icon-windows';
+  if (platform === 'linux') return 'app-download-icon-linux';
   return '';
 }
 
 function platformTitle(download) {
   if (download.platform === 'android') return 'Android-App herunterladen';
   if (download.platform === 'windows') return 'Windows-App herunterladen';
+  if (download.platform === 'linux') return 'Linux-App herunterladen';
   return `${download.label || 'App'} herunterladen`;
 }
 
 function platformLabel(platform) {
   if (platform === 'android') return 'Android';
   if (platform === 'windows') return 'Windows';
+  if (platform === 'linux') return 'Linux';
   return 'App';
 }
 
