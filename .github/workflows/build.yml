@@ -225,42 +225,88 @@ jobs:
           done
 
       - name: Generate app-downloads.json
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          WIN_FILE="nia-todo-v${VERSION}-windows-x64-setup.exe"
-          ANDROID_FILE="nia-todo-v${VERSION}-android-arm64.apk"
-          WIN_SHA=$(sha256sum "web/downloads/${WIN_FILE}" | cut -d' ' -f1)
-          ANDROID_SHA=$(sha256sum "web/downloads/${ANDROID_FILE}" | cut -d' ' -f1)
-          WIN_SIZE=$(stat -c%s "web/downloads/${WIN_FILE}")
-          ANDROID_SIZE=$(stat -c%s "web/downloads/${ANDROID_FILE}")
-          python3 -c "
-          import json, sys
+          WIN_FILE="nia-todo-v${APP_VERSION}-windows-x64-setup.exe"
+          ANDROID_FILE="nia-todo-v${APP_VERSION}-android-arm64.apk"
+          export WIN_FILE ANDROID_FILE
+          export WIN_SHA=$(sha256sum "web/downloads/${WIN_FILE}" | cut -d' ' -f1)
+          export ANDROID_SHA=$(sha256sum "web/downloads/${ANDROID_FILE}" | cut -d' ' -f1)
+          export WIN_SIZE=$(stat -c%s "web/downloads/${WIN_FILE}")
+          export ANDROID_SIZE=$(stat -c%s "web/downloads/${ANDROID_FILE}")
+          python3 <<'PYEOF'
+          import json, os, re, sys
+
+          version = os.environ['APP_VERSION']
+          win_file = os.environ['WIN_FILE']
+          android_file = os.environ['ANDROID_FILE']
+          win_sha = os.environ['WIN_SHA']
+          android_sha = os.environ['ANDROID_SHA']
+          win_size = int(os.environ['WIN_SIZE'])
+          android_size = int(os.environ['ANDROID_SIZE'])
+
+          # Validate version format: ^v?\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?$
+          version_re = re.compile(r'^v?\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?$')
+          if not version_re.match(version):
+              print(f'ERROR: version "{version}" does not match required format', file=sys.stderr)
+              sys.exit(1)
+
+          # Validate sha256: ^[a-f0-9]{64}$
+          sha_re = re.compile(r'^[a-f0-9]{64}$')
+          for name, sha in [('windows', win_sha), ('android', android_sha)]:
+              if not sha_re.match(sha):
+                  print(f'ERROR: {name} sha256 "{sha}" is not 64 hex chars', file=sys.stderr)
+                  sys.exit(1)
+
+          # Validate filenames match expected pattern
+          version_slug = version.lstrip('v')
+          expected_win = f'nia-todo-v{version_slug}-windows-x64-setup.exe'
+          expected_android = f'nia-todo-v{version_slug}-android-arm64.apk'
+          if win_file != expected_win:
+              print(f'ERROR: windows filename "{win_file}" != expected "{expected_win}"', file=sys.stderr)
+              sys.exit(1)
+          if android_file != expected_android:
+              print(f'ERROR: android filename "{android_file}" != expected "{expected_android}"', file=sys.stderr)
+              sys.exit(1)
+
+          # Validate size_bytes are safe integers
+          for name, size in [('windows', win_size), ('android', android_size)]:
+              if not isinstance(size, int) or size <= 0:
+                  print(f'ERROR: {name} size_bytes {size} is not a positive integer', file=sys.stderr)
+                  sys.exit(1)
+
           manifest = {
-              'version': '${VERSION}',
+              'version': version,
               'latest': {
                   'windows': {
                       'platform': 'windows',
                       'arch': 'x64',
-                      'url': '/downloads/${WIN_FILE}',
-                      'filename': '${WIN_FILE}',
-                      'sha256': '${WIN_SHA}',
-                      'size_bytes': ${WIN_SIZE}
+                      'url': f'/downloads/{win_file}',
+                      'filename': win_file,
+                      'sha256': win_sha,
+                      'size_bytes': win_size,
+                      'version': version,
                   },
                   'android': {
                       'platform': 'android',
                       'arch': 'arm64',
-                      'url': '/downloads/${ANDROID_FILE}',
-                      'filename': '${ANDROID_FILE}',
-                      'sha256': '${ANDROID_SHA}',
-                      'size_bytes': ${ANDROID_SIZE}
-                  }
+                      'url': f'/downloads/{android_file}',
+                      'filename': android_file,
+                      'sha256': android_sha,
+                      'size_bytes': android_size,
+                      'version': version,
+                  },
               },
-              'apps': []
+              'apps': [],
           }
           with open('web/downloads/app-downloads.json', 'w') as f:
               json.dump(manifest, f, indent=2)
-          "
+          print('app-downloads.json generated and validated successfully')
+          PYEOF
           python3 -m json.tool web/downloads/app-downloads.json
+          echo "---"
+          cat web/downloads/app-downloads.json
 
       - name: List downloads directory
         run: ls -la web/downloads/
