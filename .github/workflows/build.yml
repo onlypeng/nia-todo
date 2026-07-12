@@ -34,7 +34,7 @@ jobs:
         id: meta
         run: |
           BRANCH="${GITHUB_REF_NAME}"
-          VERSION=$(node -p "require('./package.json').version")
+          VERSION=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
           if [ "$BRANCH" = "main" ]; then
             IS_MAIN="true"
             IMAGE_TAG="${VERSION}"
