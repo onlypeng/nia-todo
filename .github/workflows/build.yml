@@ -233,31 +233,34 @@ jobs:
           ANDROID_SHA=$(sha256sum "web/downloads/${ANDROID_FILE}" | cut -d' ' -f1)
           WIN_SIZE=$(stat -c%s "web/downloads/${WIN_FILE}")
           ANDROID_SIZE=$(stat -c%s "web/downloads/${ANDROID_FILE}")
-          cat > web/downloads/app-downloads.json <<EOF
-          {
-            "version": "${VERSION}",
-            "latest": {
-              "windows": {
-                "platform": "windows",
-                "arch": "x64",
-                "url": "/downloads/${WIN_FILE}",
-                "filename": "${WIN_FILE}",
-                "sha256": "${WIN_SHA}",
-                "size_bytes": ${WIN_SIZE}
+          python3 -c "
+          import json, sys
+          manifest = {
+              'version': '${VERSION}',
+              'latest': {
+                  'windows': {
+                      'platform': 'windows',
+                      'arch': 'x64',
+                      'url': '/downloads/${WIN_FILE}',
+                      'filename': '${WIN_FILE}',
+                      'sha256': '${WIN_SHA}',
+                      'size_bytes': ${WIN_SIZE}
+                  },
+                  'android': {
+                      'platform': 'android',
+                      'arch': 'arm64',
+                      'url': '/downloads/${ANDROID_FILE}',
+                      'filename': '${ANDROID_FILE}',
+                      'sha256': '${ANDROID_SHA}',
+                      'size_bytes': ${ANDROID_SIZE}
+                  }
               },
-              "android": {
-                "platform": "android",
-                "arch": "arm64",
-                "url": "/downloads/${ANDROID_FILE}",
-                "filename": "${ANDROID_FILE}",
-                "sha256": "${ANDROID_SHA}",
-                "size_bytes": ${ANDROID_SIZE}
-              }
-            },
-            "apps": []
+              'apps': []
           }
-          EOF
-          cat web/downloads/app-downloads.json
+          with open('web/downloads/app-downloads.json', 'w') as f:
+              json.dump(manifest, f, indent=2)
+          "
+          python3 -m json.tool web/downloads/app-downloads.json
 
       - name: List downloads directory
         run: ls -la web/downloads/

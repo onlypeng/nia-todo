@@ -26,7 +26,8 @@ COPY . .
 RUN install -m 755 scripts/nia-todo-admin-password-reset.sh /usr/local/bin/nia-todo-admin-password-reset \
     && mkdir -p /data \
     && useradd -m -u 10001 nia-todo \
-    && chown -R nia-todo:nia-todo /app /data
+    && chown -R nia-todo:nia-todo /app /data \
+    && ls -la /app/web/downloads/
 
 USER nia-todo
 EXPOSE 8753
