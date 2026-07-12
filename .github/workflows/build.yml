@@ -6,8 +6,55 @@ on:
       - "main"
       - "test"
 
+# 同一分支新推送时取消旧构建，节省资源
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_VERSION: ${{ vars.APP_VERSION || '2.12.2' }}
+
 jobs:
+  # ─────────────────────────────────────────────
+  # 通用变量准备
+  # ─────────────────────────────────────────────
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      branch: ${{ steps.meta.outputs.branch }}
+      is_main: ${{ steps.meta.outputs.is_main }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      artifact_suffix: ${{ steps.meta.outputs.artifact_suffix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract metadata
+        id: meta
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "$BRANCH" = "main" ]; then
+            IS_MAIN="true"
+            IMAGE_TAG="${VERSION}"
+            ARTIFACT_SUFFIX=""
+          else
+            IS_MAIN="false"
+            IMAGE_TAG="${VERSION}-${BRANCH}"
+            ARTIFACT_SUFFIX="-${BRANCH}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "is_main=${IS_MAIN}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "artifact_suffix=${ARTIFACT_SUFFIX}" >> "$GITHUB_OUTPUT"
+
+  # ─────────────────────────────────────────────
+  # Windows 构建（原生编译）
+  # ─────────────────────────────────────────────
   build-windows:
+    needs: prepare
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -17,20 +64,26 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: rust-windows-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: rust-windows-
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build Windows installer (NSIS)
         run: npx tauri build
-
-      - name: Get version
-        id: version
-        shell: bash
-        run: echo "VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Prepare downloads directory
         shell: bash
@@ -40,19 +93,24 @@ jobs:
         shell: bash
         run: |
           WIN_INSTALLER=$(find src-tauri/target/release/bundle -name "*.exe" -type f 2>/dev/null | head -n 1)
-          if [ -n "$WIN_INSTALLER" ]; then
-            cp "$WIN_INSTALLER" "web/downloads/nia-todo-v${{ steps.version.outputs.VERSION }}-windows-x64-setup.exe"
-            echo "WINDOWS_FILE=nia-todo-v${{ steps.version.outputs.VERSION }}-windows-x64-setup.exe" >> "$GITHUB_OUTPUT"
+          if [ -z "$WIN_INSTALLER" ]; then
+            echo "::error::未找到 Windows 安装包"
+            exit 1
           fi
-        id: windows
+          cp "$WIN_INSTALLER" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-windows-x64-setup.exe"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-artifacts
+          name: windows-artifacts${{ needs.prepare.outputs.artifact_suffix }}
           path: web/downloads/
+          retention-days: 7
 
+  # ─────────────────────────────────────────────
+  # Android 构建
+  # ─────────────────────────────────────────────
   build-android:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -62,17 +120,29 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
 
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: rust-android-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: rust-android-
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
+          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -98,30 +168,30 @@ jobs:
       - name: Build Android APK
         run: npx tauri android build --apk
 
-      - name: Get version
-        id: version
-        run: echo "VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-
       - name: Prepare downloads directory
         run: mkdir -p web/downloads
 
       - name: Copy Android APK
         run: |
           ANDROID_APK=$(find src-tauri/gen/android -name "*.apk" -type f 2>/dev/null | head -n 1)
-          if [ -n "$ANDROID_APK" ]; then
-            cp "$ANDROID_APK" "web/downloads/nia-todo-v${{ steps.version.outputs.VERSION }}-android-arm64.apk"
-            echo "ANDROID_FILE=nia-todo-v${{ steps.version.outputs.VERSION }}-android-arm64.apk" >> "$GITHUB_OUTPUT"
+          if [ -z "$ANDROID_APK" ]; then
+            echo "::error::未找到 Android APK"
+            exit 1
           fi
-        id: android
+          cp "$ANDROID_APK" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-android-arm64.apk"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: android-artifacts
+          name: android-artifacts${{ needs.prepare.outputs.artifact_suffix }}
           path: web/downloads/
+          retention-days: 7
 
+  # ─────────────────────────────────────────────
+  # Docker 镜像构建与推送
+  # ─────────────────────────────────────────────
   docker:
-    needs: [build-windows, build-android]
+    needs: [prepare, build-windows, build-android]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -133,29 +203,37 @@ jobs:
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
-          name: windows-artifacts
+          name: windows-artifacts${{ needs.prepare.outputs.artifact_suffix }}
           path: web/downloads/
 
       - name: Download Android artifacts
         uses: actions/download-artifact@v4
         with:
-          name: android-artifacts
+          name: android-artifacts${{ needs.prepare.outputs.artifact_suffix }}
           path: web/downloads/
 
-      - name: Get version
-        id: version
-        run: echo "VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Verify artifacts
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          WIN_FILE="nia-todo-v${VERSION}-windows-x64-setup.exe"
+          ANDROID_FILE="nia-todo-v${VERSION}-android-arm64.apk"
+          for f in "$WIN_FILE" "$ANDROID_FILE"; do
+            if [ ! -f "web/downloads/$f" ]; then
+              echo "::error::缺少构建产物: $f"
+              exit 1
+            fi
+          done
 
       - name: Generate app-downloads.json
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
+          VERSION="${{ needs.prepare.outputs.version }}"
           WIN_FILE="nia-todo-v${VERSION}-windows-x64-setup.exe"
           ANDROID_FILE="nia-todo-v${VERSION}-android-arm64.apk"
-          WIN_SHA=$(sha256sum "web/downloads/${WIN_FILE}" 2>/dev/null | cut -d' ' -f1 || echo '')
-          ANDROID_SHA=$(sha256sum "web/downloads/${ANDROID_FILE}" 2>/dev/null | cut -d' ' -f1 || echo '')
-          WIN_SIZE=$(stat -c%s "web/downloads/${WIN_FILE}" 2>/dev/null || echo 0)
-          ANDROID_SIZE=$(stat -c%s "web/downloads/${ANDROID_FILE}" 2>/dev/null || echo 0)
-          cat > web/downloads/app-downloads.json << EOF
+          WIN_SHA=$(sha256sum "web/downloads/${WIN_FILE}" | cut -d' ' -f1)
+          ANDROID_SHA=$(sha256sum "web/downloads/${ANDROID_FILE}" | cut -d' ' -f1)
+          WIN_SIZE=$(stat -c%s "web/downloads/${WIN_FILE}")
+          ANDROID_SIZE=$(stat -c%s "web/downloads/${ANDROID_FILE}")
+          cat > web/downloads/app-downloads.json <<EOF
           {
             "version": "${VERSION}",
             "latest": {
@@ -193,9 +271,25 @@ jobs:
           username: ${{ vars.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PAT }}
 
-      - name: Build and push
+      - name: Build and push (main)
+        if: ${{ needs.prepare.outputs.is_main == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: "${{ vars.DOCKER_USER }}/nia-todo:latest"
+          tags: |
+            ${{ vars.DOCKER_USER }}/nia-todo:latest
+            ${{ vars.DOCKER_USER }}/nia-todo:${{ needs.prepare.outputs.image_tag }}
+          cache-from: type=registry,ref=${{ vars.DOCKER_USER }}/nia-todo:cache
+          cache-to: type=registry,ref=${{ vars.DOCKER_USER }}/nia-todo:cache,mode=max
+
+      - name: Build and push (test)
+        if: ${{ needs.prepare.outputs.is_main != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ vars.DOCKER_USER }}/nia-todo:${{ needs.prepare.outputs.image_tag }}
+          cache-from: type=registry,ref=${{ vars.DOCKER_USER }}/nia-todo:cache
+          cache-to: type=registry,ref=${{ vars.DOCKER_USER }}/nia-todo:cache,mode=max
