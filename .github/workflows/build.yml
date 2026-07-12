@@ -11,9 +11,6 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  APP_VERSION: ${{ vars.APP_VERSION || '2.12.2' }}
-
 jobs:
   # ─────────────────────────────────────────────
   # 通用变量准备
@@ -49,6 +46,7 @@ jobs:
           echo "is_main=${IS_MAIN}" >> "$GITHUB_OUTPUT"
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
           echo "artifact_suffix=${ARTIFACT_SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}, Branch: ${BRANCH}, ImageTag: ${IMAGE_TAG}"
 
   # ─────────────────────────────────────────────
   # Windows 构建（原生编译）
@@ -92,12 +90,19 @@ jobs:
       - name: Copy Windows installer
         shell: bash
         run: |
-          WIN_INSTALLER=$(find src-tauri/target/release/bundle -name "*.exe" -type f 2>/dev/null | head -n 1)
+          # 优先查找 NSIS 安装包（非 MSI bootstrap exe）
+          WIN_INSTALLER=$(find src-tauri/target/release/bundle/nsis -name "*_x64-setup.exe" -type f 2>/dev/null | head -n 1)
+          if [ -z "$WIN_INSTALLER" ]; then
+            # 回退：查找 bundle 目录下任意 setup exe
+            WIN_INSTALLER=$(find src-tauri/target/release/bundle -name "*-setup.exe" -type f 2>/dev/null | head -n 1)
+          fi
           if [ -z "$WIN_INSTALLER" ]; then
             echo "::error::未找到 Windows 安装包"
+            ls -R src-tauri/target/release/bundle/ 2>/dev/null || true
             exit 1
           fi
           cp "$WIN_INSTALLER" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-windows-x64-setup.exe"
+          echo "Copied: $WIN_INSTALLER"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -165,20 +170,30 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Android APK
-        run: npx tauri android build --apk
+      - name: Initialize Tauri Android project
+        run: npx tauri android init --ci
+
+      - name: Build Android APK (debug, unsigned)
+        run: npx tauri android build --apk --debug
 
       - name: Prepare downloads directory
         run: mkdir -p web/downloads
 
       - name: Copy Android APK
         run: |
-          ANDROID_APK=$(find src-tauri/gen/android -name "*.apk" -type f 2>/dev/null | head -n 1)
+          # tauri android build 输出 APK 到 gen/android/app/build/outputs/apk/
+          ANDROID_APK=$(find src-tauri/gen/android -name "*.apk" -path "*/outputs/apk/*" -type f 2>/dev/null | head -n 1)
+          if [ -z "$ANDROID_APK" ]; then
+            # 回退：查找任意 APK
+            ANDROID_APK=$(find src-tauri/gen/android -name "*.apk" -type f 2>/dev/null | head -n 1)
+          fi
           if [ -z "$ANDROID_APK" ]; then
             echo "::error::未找到 Android APK"
+            find src-tauri/gen/android -name "*.apk" 2>/dev/null || true
             exit 1
           fi
           cp "$ANDROID_APK" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-android-arm64.apk"
+          echo "Copied: $ANDROID_APK"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -217,12 +232,15 @@ jobs:
           VERSION="${{ needs.prepare.outputs.version }}"
           WIN_FILE="nia-todo-v${VERSION}-windows-x64-setup.exe"
           ANDROID_FILE="nia-todo-v${VERSION}-android-arm64.apk"
+          echo "Expected files: ${WIN_FILE}, ${ANDROID_FILE}"
           for f in "$WIN_FILE" "$ANDROID_FILE"; do
             if [ ! -f "web/downloads/$f" ]; then
               echo "::error::缺少构建产物: $f"
+              ls -la web/downloads/ || true
               exit 1
             fi
           done
+          echo "All artifacts verified"
 
       - name: Generate app-downloads.json
         env:
@@ -304,12 +322,12 @@ jobs:
               json.dump(manifest, f, indent=2)
           print('app-downloads.json generated and validated successfully')
           PYEOF
-          python3 -m json.tool web/downloads/app-downloads.json
-          echo "---"
+          python3 -m json.tool web/downloads/app-downloads.json > /dev/null
+          echo "--- Manifest content ---"
           cat web/downloads/app-downloads.json
 
       - name: List downloads directory
-        run: ls -la web/downloads/
+        run: ls -lah web/downloads/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

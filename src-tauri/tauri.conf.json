@@ -44,7 +44,7 @@
       },
       "nsis": {
         "displayLanguageSelector": true,
-        "languages": ["English", "German"],
+        "languages": ["English", "German", "SimpChinese"],
         "installerHooks": "windows/nsis-hooks.nsh"
       }
     }
