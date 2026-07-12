@@ -31,7 +31,7 @@ jobs:
         id: meta
         run: |
           BRANCH="${GITHUB_REF_NAME}"
-          VERSION=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
+          VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
           if [ "$BRANCH" = "main" ]; then
             IS_MAIN="true"
             IMAGE_TAG="${VERSION}"
