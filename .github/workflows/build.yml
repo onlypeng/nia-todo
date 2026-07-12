@@ -96,7 +96,7 @@ jobs:
         run: npm ci
 
       - name: Build Android APK
-        run: npx tauri build --target aarch64-linux-android
+        run: npx tauri android build --apk
 
       - name: Get version
         id: version
@@ -107,7 +107,7 @@ jobs:
 
       - name: Copy Android APK
         run: |
-          ANDROID_APK=$(find src-tauri/target/aarch64-linux-android/release/bundle -name "*.apk" -type f 2>/dev/null | head -n 1)
+          ANDROID_APK=$(find src-tauri/gen/android -name "*.apk" -type f 2>/dev/null | head -n 1)
           if [ -n "$ANDROID_APK" ]; then
             cp "$ANDROID_APK" "web/downloads/nia-todo-v${{ steps.version.outputs.VERSION }}-android-arm64.apk"
             echo "ANDROID_FILE=nia-todo-v${{ steps.version.outputs.VERSION }}-android-arm64.apk" >> "$GITHUB_OUTPUT"
