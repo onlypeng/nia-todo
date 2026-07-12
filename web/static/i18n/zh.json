@@ -1262,5 +1262,20 @@
   "admin.user.sessionRevokeTitle": "结束会话？",
   "admin.user.sessionRevokeMessage": "此用户会话将立即结束。如果使用了记住的双重验证设备，该设备也将被撤销。",
   "admin.user.sessionsRevokeAllTitle": "结束所有会话？",
-  "admin.user.sessionsRevokeAllMessage": "{username} 的所有活跃会话和记住的双重验证设备将被结束。"
+  "admin.user.sessionsRevokeAllMessage": "{username} 的所有活跃会话和记住的双重验证设备将被结束。",
+  "auth.reset.identifierRequired": "请输入用户名或邮箱。",
+  "auth.reset.emailSent": "如果存在匹配的账户，已发送邮件。",
+  "auth.reset.requestFailed": "无法请求重置。",
+  "setup.displayNamePlaceholder": "例如：张三",
+  "setup.emailPlaceholder": "例如：zhangsan@example.com",
+  "admin.instance.allowedOrigins": "允许的来源 / CORS",
+  "admin.instance.trustedProxies": "受信代理",
+  "admin.email.smtpHost": "SMTP 主机",
+  "admin.email.smtpPort": "SMTP 端口",
+  "admin.email.smtpUsername": "SMTP 用户名",
+  "admin.email.replyTo": "回复地址（可选）",
+  "common.requestFailed": "请求失败",
+  "common.loginFailed": "登录失败",
+  "common.importFailed": "导入失败",
+  "common.bootTimeout": "启动超时"
 }

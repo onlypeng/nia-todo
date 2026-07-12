@@ -888,6 +888,7 @@ export function startAppModule() {
   window.addEventListener('nia-language-change', () => {
     translatePage(document);
     applyTheme(localStorage.getItem('theme') || 'system');
+    updateUserMenu();
     renderProjects();
     renderWorkspaces();
     renderStats();

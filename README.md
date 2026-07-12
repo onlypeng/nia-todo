@@ -4,6 +4,8 @@ Self-hosted todo system — SQLite + FastAPI + Web UI + offline PWA + native Win
 
 nia-todo is designed for private self-hosting: install the server, open the web app, then download the bundled native apps directly from your own instance.
 
+[中文文档](README_CN.md)
+
 ## 📸 Screenshots
 
 <p align="center">
@@ -33,7 +35,7 @@ nia-todo is designed for private self-hosting: install the server, open the web 
 - 🛡️ 2FA/MFA with TOTP, passkeys/WebAuthn, email-code fallback, recovery codes, trusted devices, and admin policy
 - 🔔 Native local reminders on Windows and Android; browser/PWA push remains browser/PWA-only
 - 🎙️ BrainDump voice capture for turning spoken notes into reviewed todo candidates, backed by configurable STT/LLM providers
-- 🎨 Theme toggle and English/German UI language support
+- 🎨 Theme toggle and Chinese/English/German UI language support
 - 🗄️ Local SQLite database
 
 ## 🔁 Recurring todos

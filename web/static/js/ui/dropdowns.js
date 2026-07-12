@@ -1,4 +1,5 @@
 import { iconSvg } from '../icons/lucide-icons.js';
+import { t } from '../i18n/index.js';
 
 const registry = new WeakMap();
 let openState = null;
@@ -133,7 +134,7 @@ function renderSearch(instance) {
   input.type = 'search';
   input.className = 'ui-select-search-input';
   input.value = instance.searchTerm || '';
-  input.placeholder = instance.options.searchPlaceholder || 'Projekte suchen';
+  input.placeholder = instance.options.searchPlaceholder || t('common.search');
   input.setAttribute('aria-label', instance.options.searchLabel || input.placeholder);
   input.addEventListener('input', () => {
     instance.searchTerm = input.value;

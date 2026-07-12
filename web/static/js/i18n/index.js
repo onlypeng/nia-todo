@@ -61,10 +61,10 @@ export async function setLanguagePreference(mode, { authApi = null, syncServer =
   if (normalized === 'auto') localStorage.removeItem(LANGUAGE_STORAGE_KEY);
   else localStorage.setItem(LANGUAGE_STORAGE_KEY, normalized);
   await initI18n();
-  if (syncServer && authApi?.updateLanguage) await syncLanguagePreference(authApi);
   window.dispatchEvent(new CustomEvent('nia-language-change', {
     detail: { preference: getLanguagePreference(), language: getActiveLanguage() },
   }));
+  if (syncServer && authApi?.updateLanguage) await syncLanguagePreference(authApi);
 }
 
 export async function syncLanguagePreference(authApi) {

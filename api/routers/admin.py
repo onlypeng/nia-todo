@@ -509,7 +509,7 @@ def create_user(data: CreateUserRequest, request: Request, _: bool = Depends(req
     data.display_name = sanitize_text(data.display_name)
     data.email = normalize_email(sanitize_text(data.email))
     data.language = (data.language or 'de').strip().lower()
-    if data.language not in {'de', 'en'}:
+    if data.language not in {'de', 'en', 'zh'}:
         raise api_error(400, 'language.invalid', 'Invalid language')
     email_error = validate_email(data.email)
     if email_error:

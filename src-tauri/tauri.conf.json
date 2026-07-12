@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "nia-todo",
-  "version": "2.12.2",
+  "version": "2.12.3",
   "identifier": "de.tobiaskneidl.nia-todo",
   "build": {
     "beforeDevCommand": "",
@@ -34,6 +34,7 @@
     "copyright": "Copyright © 2026 Tobias Kneidl",
     "targets": ["nsis", "msi"],
     "icon": [
+      "icons/icon.ico",
       "../web/static/icons/icon-192.png",
       "../web/static/icons/icon-512.png"
     ],
@@ -43,7 +44,7 @@
       },
       "nsis": {
         "displayLanguageSelector": true,
-        "languages": ["English", "German"],
+        "languages": ["English", "German", "SimpChinese"],
         "installerHooks": "windows/nsis-hooks.nsh"
       }
     }

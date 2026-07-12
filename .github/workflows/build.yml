@@ -4,13 +4,330 @@ on:
   push:
     branches:
       - "main"
+      - "test"
+
+# 同一分支新推送时取消旧构建，节省资源
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  docker:
+  # ─────────────────────────────────────────────
+  # 通用变量准备
+  # ─────────────────────────────────────────────
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      branch: ${{ steps.meta.outputs.branch }}
+      is_main: ${{ steps.meta.outputs.is_main }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      artifact_suffix: ${{ steps.meta.outputs.artifact_suffix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract metadata
+        id: meta
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          if [ "$BRANCH" = "main" ]; then
+            IS_MAIN="true"
+            IMAGE_TAG="${VERSION}"
+            ARTIFACT_SUFFIX=""
+          else
+            IS_MAIN="false"
+            IMAGE_TAG="${VERSION}-${BRANCH}"
+            ARTIFACT_SUFFIX="-${BRANCH}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "is_main=${IS_MAIN}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "artifact_suffix=${ARTIFACT_SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}, Branch: ${BRANCH}, ImageTag: ${IMAGE_TAG}"
+
+  # ─────────────────────────────────────────────
+  # Windows 构建（原生编译）
+  # ─────────────────────────────────────────────
+  build-windows:
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: rust-windows-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: rust-windows-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows installer (NSIS)
+        run: npx tauri build
+
+      - name: Prepare downloads directory
+        shell: bash
+        run: mkdir -p web/downloads
+
+      - name: Copy Windows installer
+        shell: bash
+        run: |
+          # 优先查找 NSIS 安装包（非 MSI bootstrap exe）
+          WIN_INSTALLER=$(find src-tauri/target/release/bundle/nsis -name "*_x64-setup.exe" -type f 2>/dev/null | head -n 1)
+          if [ -z "$WIN_INSTALLER" ]; then
+            # 回退：查找 bundle 目录下任意 setup exe
+            WIN_INSTALLER=$(find src-tauri/target/release/bundle -name "*-setup.exe" -type f 2>/dev/null | head -n 1)
+          fi
+          if [ -z "$WIN_INSTALLER" ]; then
+            echo "::error::未找到 Windows 安装包"
+            ls -R src-tauri/target/release/bundle/ 2>/dev/null || true
+            exit 1
+          fi
+          cp "$WIN_INSTALLER" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-windows-x64-setup.exe"
+          echo "Copied: $WIN_INSTALLER"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts${{ needs.prepare.outputs.artifact_suffix }}
+          path: web/downloads/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # Android 构建
+  # ─────────────────────────────────────────────
+  build-android:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: rust-android-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: rust-android-
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          build-tools: 34.0.0
+
+      - name: Set up Android NDK
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.0.12077973" || true
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          NDK_BIN="$ANDROID_HOME/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${NDK_BIN}/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=${NDK_BIN}/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=${NDK_BIN}/aarch64-linux-android24-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=${NDK_BIN}/llvm-ar" >> "$GITHUB_ENV"
+          echo "${NDK_BIN}" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize Tauri Android project
+        run: npx tauri android init --ci
+
+      - name: Build Android APK (debug, unsigned)
+        run: npx tauri android build --apk --debug
+
+      - name: Prepare downloads directory
+        run: mkdir -p web/downloads
+
+      - name: Copy Android APK
+        run: |
+          # tauri android build 输出 APK 到 gen/android/app/build/outputs/apk/
+          ANDROID_APK=$(find src-tauri/gen/android -name "*.apk" -path "*/outputs/apk/*" -type f 2>/dev/null | head -n 1)
+          if [ -z "$ANDROID_APK" ]; then
+            # 回退：查找任意 APK
+            ANDROID_APK=$(find src-tauri/gen/android -name "*.apk" -type f 2>/dev/null | head -n 1)
+          fi
+          if [ -z "$ANDROID_APK" ]; then
+            echo "::error::未找到 Android APK"
+            find src-tauri/gen/android -name "*.apk" 2>/dev/null || true
+            exit 1
+          fi
+          cp "$ANDROID_APK" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-android-arm64.apk"
+          echo "Copied: $ANDROID_APK"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-artifacts${{ needs.prepare.outputs.artifact_suffix }}
+          path: web/downloads/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # Docker 镜像构建与推送
+  # ─────────────────────────────────────────────
+  docker:
+    needs: [prepare, build-windows, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare downloads directory
+        run: mkdir -p web/downloads
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-artifacts${{ needs.prepare.outputs.artifact_suffix }}
+          path: web/downloads/
+
+      - name: Download Android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android-artifacts${{ needs.prepare.outputs.artifact_suffix }}
+          path: web/downloads/
+
+      - name: Verify artifacts
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          WIN_FILE="nia-todo-v${VERSION}-windows-x64-setup.exe"
+          ANDROID_FILE="nia-todo-v${VERSION}-android-arm64.apk"
+          echo "Expected files: ${WIN_FILE}, ${ANDROID_FILE}"
+          for f in "$WIN_FILE" "$ANDROID_FILE"; do
+            if [ ! -f "web/downloads/$f" ]; then
+              echo "::error::缺少构建产物: $f"
+              ls -la web/downloads/ || true
+              exit 1
+            fi
+          done
+          echo "All artifacts verified"
+
+      - name: Generate app-downloads.json
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          WIN_FILE="nia-todo-v${APP_VERSION}-windows-x64-setup.exe"
+          ANDROID_FILE="nia-todo-v${APP_VERSION}-android-arm64.apk"
+          export WIN_FILE ANDROID_FILE
+          export WIN_SHA=$(sha256sum "web/downloads/${WIN_FILE}" | cut -d' ' -f1)
+          export ANDROID_SHA=$(sha256sum "web/downloads/${ANDROID_FILE}" | cut -d' ' -f1)
+          export WIN_SIZE=$(stat -c%s "web/downloads/${WIN_FILE}")
+          export ANDROID_SIZE=$(stat -c%s "web/downloads/${ANDROID_FILE}")
+          python3 <<'PYEOF'
+          import json, os, re, sys
+
+          version = os.environ['APP_VERSION']
+          win_file = os.environ['WIN_FILE']
+          android_file = os.environ['ANDROID_FILE']
+          win_sha = os.environ['WIN_SHA']
+          android_sha = os.environ['ANDROID_SHA']
+          win_size = int(os.environ['WIN_SIZE'])
+          android_size = int(os.environ['ANDROID_SIZE'])
+
+          # Validate version format: ^v?\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?$
+          version_re = re.compile(r'^v?\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?$')
+          if not version_re.match(version):
+              print(f'ERROR: version "{version}" does not match required format', file=sys.stderr)
+              sys.exit(1)
+
+          # Validate sha256: ^[a-f0-9]{64}$
+          sha_re = re.compile(r'^[a-f0-9]{64}$')
+          for name, sha in [('windows', win_sha), ('android', android_sha)]:
+              if not sha_re.match(sha):
+                  print(f'ERROR: {name} sha256 "{sha}" is not 64 hex chars', file=sys.stderr)
+                  sys.exit(1)
+
+          # Validate filenames match expected pattern
+          version_slug = version.lstrip('v')
+          expected_win = f'nia-todo-v{version_slug}-windows-x64-setup.exe'
+          expected_android = f'nia-todo-v{version_slug}-android-arm64.apk'
+          if win_file != expected_win:
+              print(f'ERROR: windows filename "{win_file}" != expected "{expected_win}"', file=sys.stderr)
+              sys.exit(1)
+          if android_file != expected_android:
+              print(f'ERROR: android filename "{android_file}" != expected "{expected_android}"', file=sys.stderr)
+              sys.exit(1)
+
+          # Validate size_bytes are safe integers
+          for name, size in [('windows', win_size), ('android', android_size)]:
+              if not isinstance(size, int) or size <= 0:
+                  print(f'ERROR: {name} size_bytes {size} is not a positive integer', file=sys.stderr)
+                  sys.exit(1)
+
+          manifest = {
+              'version': version,
+              'latest': {
+                  'windows': {
+                      'platform': 'windows',
+                      'arch': 'x64',
+                      'url': f'/downloads/{win_file}',
+                      'filename': win_file,
+                      'sha256': win_sha,
+                      'size_bytes': win_size,
+                      'version': version,
+                  },
+                  'android': {
+                      'platform': 'android',
+                      'arch': 'arm64',
+                      'url': f'/downloads/{android_file}',
+                      'filename': android_file,
+                      'sha256': android_sha,
+                      'size_bytes': android_size,
+                      'version': version,
+                  },
+              },
+              'apps': [],
+          }
+          with open('web/downloads/app-downloads.json', 'w') as f:
+              json.dump(manifest, f, indent=2)
+          print('app-downloads.json generated and validated successfully')
+          PYEOF
+          python3 -m json.tool web/downloads/app-downloads.json > /dev/null
+          echo "--- Manifest content ---"
+          cat web/downloads/app-downloads.json
+
+      - name: List downloads directory
+        run: ls -lah web/downloads/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -21,9 +338,25 @@ jobs:
           username: ${{ vars.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PAT }}
 
-      - name: Build and push
+      - name: Build and push (main)
+        if: ${{ needs.prepare.outputs.is_main == 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: "${{ vars.DOCKER_USER }}/nia-todo:latest"
+          tags: |
+            ${{ vars.DOCKER_USER }}/nia-todo:latest
+            ${{ vars.DOCKER_USER }}/nia-todo:${{ needs.prepare.outputs.image_tag }}
+          cache-from: type=registry,ref=${{ vars.DOCKER_USER }}/nia-todo:cache
+          cache-to: type=registry,ref=${{ vars.DOCKER_USER }}/nia-todo:cache,mode=max
+
+      - name: Build and push (test)
+        if: ${{ needs.prepare.outputs.is_main != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ vars.DOCKER_USER }}/nia-todo:${{ needs.prepare.outputs.image_tag }}
+          cache-from: type=registry,ref=${{ vars.DOCKER_USER }}/nia-todo:cache
+          cache-to: type=registry,ref=${{ vars.DOCKER_USER }}/nia-todo:cache,mode=max
