@@ -84,8 +84,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Windows installer (NSIS)
-        run: npx tauri build --bundles nsis
+      - name: Build Windows installer (NSIS + MSI)
+        run: npx tauri build --bundles nsis,msi
 
       - name: Prepare downloads directory
         shell: bash
@@ -177,19 +177,84 @@ jobs:
       - name: Initialize Tauri Android project
         run: npx tauri android init --ci
 
-      - name: Build Android APK (debug, unsigned)
-        run: npx tauri android build --apk --debug
+      - name: Generate CI signing keystore
+        run: |
+          keytool -genkeypair \
+            -alias ci-key \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -keystore $HOME/ci-keystore.jks \
+            -storepass nia-todo-ci \
+            -keypass nia-todo-ci \
+            -dname "CN=nia-todo, OU=CI, O=nia-todo, L=CI, S=CI, C=DE"
+
+      - name: Configure release signing and ABI filters
+        run: |
+          cat > src-tauri/gen/android/app/ci-signing.gradle <<'GRADLE'
+          android {
+            signingConfigs {
+              ciRelease {
+                storeFile file(System.getProperty('user.home') + '/ci-keystore.jks')
+                storePassword 'nia-todo-ci'
+                keyAlias 'ci-key'
+                keyPassword 'nia-todo-ci'
+              }
+            }
+            defaultConfig {
+              ndk {
+                abiFilters += 'arm64-v8a'
+              }
+            }
+            buildTypes {
+              release {
+                signingConfig signingConfigs.ciRelease
+                minifyEnabled true
+                shrinkResources true
+                proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+              }
+            }
+            splits {
+              abi {
+                enable true
+                reset()
+                include 'arm64-v8a'
+                universalApk false
+              }
+            }
+            packaging {
+              jniLibs {
+                excludes += ['lib/x86/**', 'lib/x86_64/**', 'lib/armeabi-v7a/**']
+              }
+            }
+          }
+          GRADLE
+          echo "apply from: 'ci-signing.gradle'" >> src-tauri/gen/android/app/build.gradle.kts
+          cat > src-tauri/gen/android/app/proguard-rules.pro <<'PRO'
+          -keep class de.tobiaskneidl.** { *; }
+          -keepclassmembers class * {
+            @android.webkit.JavascriptInterface <methods>;
+          }
+          -keep class rust.** { *; }
+          -keep class com.tauri.** { *; }
+          PRO
+
+      - name: Build Android APK (release, signed, arm64 only)
+        run: npx tauri android build --apk
 
       - name: Prepare downloads directory
         run: mkdir -p web/downloads
 
-      - name: Copy Android APK
+      - name: Copy Android APK (arm64 only)
         run: |
-          # tauri android build 输出 APK 到 gen/android/app/build/outputs/apk/
-          ANDROID_APK=$(find src-tauri/gen/android -name "*.apk" -path "*/outputs/apk/*" -type f 2>/dev/null | head -n 1)
+          # 优先查找 arm64-v8a release APK
+          ANDROID_APK=$(find src-tauri/gen/android -name "*arm64*.apk" -path "*/release/*" -type f 2>/dev/null | head -n 1)
           if [ -z "$ANDROID_APK" ]; then
-            # 回退：查找任意 APK
-            ANDROID_APK=$(find src-tauri/gen/android -name "*.apk" -type f 2>/dev/null | head -n 1)
+            ANDROID_APK=$(find src-tauri/gen/android -name "*arm64*.apk" -type f 2>/dev/null | head -n 1)
+          fi
+          if [ -z "$ANDROID_APK" ]; then
+            # 回退：查找任意 release APK
+            ANDROID_APK=$(find src-tauri/gen/android -name "*.apk" -path "*/release/*" -type f 2>/dev/null | head -n 1)
           fi
           if [ -z "$ANDROID_APK" ]; then
             echo "::error::未找到 Android APK"
@@ -198,6 +263,7 @@ jobs:
           fi
           cp "$ANDROID_APK" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-android-arm64.apk"
           echo "Copied: $ANDROID_APK"
+          echo "APK size: $(du -h "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-android-arm64.apk" | cut -f1)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
