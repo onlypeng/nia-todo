@@ -23,6 +23,7 @@ jobs:
       is_main: ${{ steps.meta.outputs.is_main }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
       artifact_suffix: ${{ steps.meta.outputs.artifact_suffix }}
+      tag_name: ${{ steps.meta.outputs.tag_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,17 +37,20 @@ jobs:
             IS_MAIN="true"
             IMAGE_TAG="${VERSION}"
             ARTIFACT_SUFFIX=""
+            TAG_NAME="v${VERSION}"
           else
             IS_MAIN="false"
             IMAGE_TAG="${VERSION}-${BRANCH}"
             ARTIFACT_SUFFIX="-${BRANCH}"
+            TAG_NAME="v${VERSION}-${BRANCH}"
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
           echo "is_main=${IS_MAIN}" >> "$GITHUB_OUTPUT"
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
           echo "artifact_suffix=${ARTIFACT_SUFFIX}" >> "$GITHUB_OUTPUT"
-          echo "Version: ${VERSION}, Branch: ${BRANCH}, ImageTag: ${IMAGE_TAG}"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}, Branch: ${BRANCH}, ImageTag: ${IMAGE_TAG}, Tag: ${TAG_NAME}"
 
   # ─────────────────────────────────────────────
   # Windows 构建（原生编译）
@@ -203,6 +207,61 @@ jobs:
           retention-days: 7
 
   # ─────────────────────────────────────────────
+  # Linux 服务器端 deb 包构建
+  # ─────────────────────────────────────────────
+  build-deb:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dpkg-deb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev
+
+      - name: Cache pip wheels
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-deb-${{ hashFiles('requirements.txt') }}
+
+      - name: Build deb package
+        run: |
+          chmod +x scripts/build-deb.sh
+          ./scripts/build-deb.sh "${{ needs.prepare.outputs.version }}"
+
+      - name: Verify deb
+        run: |
+          DEB_FILE="dist/nia-todo-server-v${{ needs.prepare.outputs.version }}-full.deb"
+          if [ ! -f "$DEB_FILE" ]; then
+            echo "::error::deb 包未生成"
+            ls -la dist/ || true
+            exit 1
+          fi
+          echo "deb 包信息:"
+          dpkg-deb --info "$DEB_FILE"
+          echo ""
+          echo "deb 包内容:"
+          dpkg-deb --contents "$DEB_FILE" | head -30
+          echo ""
+          echo "SHA256: $(sha256sum "$DEB_FILE" | cut -d' ' -f1)"
+          echo "Size: $(du -h "$DEB_FILE" | cut -f1)"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-artifacts${{ needs.prepare.outputs.artifact_suffix }}
+          path: dist/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
   # Docker 镜像构建与推送
   # ─────────────────────────────────────────────
   docker:
@@ -264,20 +323,20 @@ jobs:
           win_size = int(os.environ['WIN_SIZE'])
           android_size = int(os.environ['ANDROID_SIZE'])
 
-          # Validate version format: ^v?\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?$
+          # Validate version format
           version_re = re.compile(r'^v?\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?$')
           if not version_re.match(version):
               print(f'ERROR: version "{version}" does not match required format', file=sys.stderr)
               sys.exit(1)
 
-          # Validate sha256: ^[a-f0-9]{64}$
+          # Validate sha256
           sha_re = re.compile(r'^[a-f0-9]{64}$')
           for name, sha in [('windows', win_sha), ('android', android_sha)]:
               if not sha_re.match(sha):
                   print(f'ERROR: {name} sha256 "{sha}" is not 64 hex chars', file=sys.stderr)
                   sys.exit(1)
 
-          # Validate filenames match expected pattern
+          # Validate filenames
           version_slug = version.lstrip('v')
           expected_win = f'nia-todo-v{version_slug}-windows-x64-setup.exe'
           expected_android = f'nia-todo-v{version_slug}-android-arm64.apk'
@@ -288,7 +347,7 @@ jobs:
               print(f'ERROR: android filename "{android_file}" != expected "{expected_android}"', file=sys.stderr)
               sys.exit(1)
 
-          # Validate size_bytes are safe integers
+          # Validate sizes
           for name, size in [('windows', win_size), ('android', android_size)]:
               if not isinstance(size, int) or size <= 0:
                   print(f'ERROR: {name} size_bytes {size} is not a positive integer', file=sys.stderr)
@@ -338,25 +397,144 @@ jobs:
           username: ${{ vars.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PAT }}
 
-      - name: Build and push (main)
-        if: ${{ needs.prepare.outputs.is_main == 'true' }}
+      - name: Docker metadata
+        id: docker_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.DOCKER_USER }}/nia-todo
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.image_tag }}
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.is_main == 'true' }}
+
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: |
-            ${{ vars.DOCKER_USER }}/nia-todo:latest
-            ${{ vars.DOCKER_USER }}/nia-todo:${{ needs.prepare.outputs.image_tag }}
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          labels: ${{ steps.docker_meta.outputs.labels }}
           cache-from: type=registry,ref=${{ vars.DOCKER_USER }}/nia-todo:cache
           cache-to: type=registry,ref=${{ vars.DOCKER_USER }}/nia-todo:cache,mode=max
 
-      - name: Build and push (test)
-        if: ${{ needs.prepare.outputs.is_main != 'true' }}
-        uses: docker/build-push-action@v6
+  # ─────────────────────────────────────────────
+  # GitHub Release 发布（仅 main 分支）
+  # ─────────────────────────────────────────────
+  release:
+    needs: [prepare, build-windows, build-android, build-deb, docker]
+    if: ${{ needs.prepare.outputs.is_main == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare release assets directory
+        run: mkdir -p release-assets
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
         with:
-          context: .
-          push: true
-          tags: |
-            ${{ vars.DOCKER_USER }}/nia-todo:${{ needs.prepare.outputs.image_tag }}
-          cache-from: type=registry,ref=${{ vars.DOCKER_USER }}/nia-todo:cache
-          cache-to: type=registry,ref=${{ vars.DOCKER_USER }}/nia-todo:cache,mode=max
+          name: windows-artifacts
+          path: release-assets/
+
+      - name: Download Android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android-artifacts
+          path: release-assets/
+
+      - name: Download deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: deb-artifacts
+          path: release-assets/
+
+      - name: List release assets
+        run: |
+          echo "Release assets:"
+          ls -lah release-assets/
+          echo ""
+          echo "SHA256 checksums:"
+          cd release-assets && sha256sum * || true
+
+      - name: Generate checksums file
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ needs.prepare.outputs.tag_name }}';
+            const ref = `refs/tags/${tag}`;
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: ref,
+                sha: context.sha
+              });
+              console.log(`Created tag: ${tag}`);
+            } catch (error) {
+              if (error.status === 422) {
+                console.log(`Tag ${tag} already exists, updating...`);
+                await github.rest.git.updateRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `tags/${tag}`,
+                  sha: context.sha,
+                  force: true
+                });
+              } else {
+                throw error;
+              }
+            }
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          name: nia-todo ${{ needs.prepare.outputs.tag_name }}
+          body: |
+            ## nia-todo ${{ needs.prepare.outputs.tag_name }}
+
+            ### 下载
+
+            | 平台 | 文件 | 说明 |
+            |------|------|------|
+            | Windows | `nia-todo-v${{ needs.prepare.outputs.version }}-windows-x64-setup.exe` | NSIS 安装程序 |
+            | Android | `nia-todo-v${{ needs.prepare.outputs.version }}-android-arm64.apk` | APK 安装包 |
+            | Linux 服务器 | `nia-todo-server-v${{ needs.prepare.outputs.version }}-full.deb` | Debian/Ubuntu 服务器包 |
+
+            ### Docker
+
+            ```bash
+            docker pull ${{ vars.DOCKER_USER }}/nia-todo:${{ needs.prepare.outputs.image_tag }}
+            docker pull ${{ vars.DOCKER_USER }}/nia-todo:latest
+            ```
+
+            ### 校验
+
+            请使用 `SHA256SUMS.txt` 验证下载文件的完整性。
+
+            ```bash
+            sha256sum -c SHA256SUMS.txt
+            ```
+
+            ### 安装
+
+            - **Debian/Ubuntu**: `sudo apt install ./nia-todo-server-v${{ needs.prepare.outputs.version }}-full.deb`
+            - **Docker**: 见 [README](README.md#-docker)
+            - **Windows**: 双击 `.exe` 安装
+            - **Android**: 安装 `.apk` 文件
+
+            ---
+            Full changelog: https://github.com/${{ github.repository }}/commits
+          files: |
+            release-assets/*
+          draft: false
+          prerelease: false
+          generate_release_notes: false
