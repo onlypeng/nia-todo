@@ -191,53 +191,67 @@ jobs:
 
       - name: Configure release signing and ABI filters
         run: |
+          # 创建 Groovy 配置脚本（只添加 build.gradle.kts 中不存在的配置，避免冲突）
+          # - signingConfigs: kts 中不存在，新增
+          # - ndk abiFilters: kts 中不存在，新增
+          # - signingConfig: kts release 块中不存在，追加
+          # - shrinkResources: kts release 块中不存在，追加
+          # - splits: kts 中不存在，新增
+          # - packaging excludes: kts 中不存在，新增
+          # 注意：不重复声明 minifyEnabled/proguardFiles，kts 中已有
           cat > src-tauri/gen/android/app/ci-signing.gradle <<'GRADLE'
           android {
-            signingConfigs {
-              ciRelease {
-                storeFile file(System.getProperty('user.home') + '/ci-keystore.jks')
-                storePassword 'nia-todo-ci'
-                keyAlias 'ci-key'
-                keyPassword 'nia-todo-ci'
+              signingConfigs {
+                  ciRelease {
+                      storeFile file(System.getProperty('user.home') + '/ci-keystore.jks')
+                      storePassword 'nia-todo-ci'
+                      keyAlias 'ci-key'
+                      keyPassword 'nia-todo-ci'
+                  }
               }
-            }
-            defaultConfig {
-              ndk {
-                abiFilters += 'arm64-v8a'
+              defaultConfig {
+                  ndk {
+                      abiFilters 'arm64-v8a'
+                  }
               }
-            }
-            buildTypes {
-              release {
-                signingConfig signingConfigs.ciRelease
-                minifyEnabled true
-                shrinkResources true
-                proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.ciRelease
+                      shrinkResources true
+                  }
               }
-            }
-            splits {
-              abi {
-                enable true
-                reset()
-                include 'arm64-v8a'
-                universalApk false
+              splits {
+                  abi {
+                      enable true
+                      reset()
+                      include 'arm64-v8a'
+                      universalApk false
+                  }
               }
-            }
-            packaging {
-              jniLibs {
-                excludes += ['lib/x86/**', 'lib/x86_64/**', 'lib/armeabi-v7a/**']
+              packagingOptions {
+                  jniLibs {
+                      excludes += ['lib/x86/**', 'lib/x86_64/**', 'lib/armeabi-v7a/**']
+                  }
               }
-            }
           }
           GRADLE
-          echo "apply from: 'ci-signing.gradle'" >> src-tauri/gen/android/app/build.gradle.kts
+
+          # 用 Kotlin DSL 语法 apply（不能在 .kts 文件里用 Groovy 语法 apply from:）
+          echo "" >> src-tauri/gen/android/app/build.gradle.kts
+          echo 'apply(from = "ci-signing.gradle")' >> src-tauri/gen/android/app/build.gradle.kts
+
+          # 创建 ProGuard 规则
           cat > src-tauri/gen/android/app/proguard-rules.pro <<'PRO'
           -keep class de.tobiaskneidl.** { *; }
           -keepclassmembers class * {
-            @android.webkit.JavascriptInterface <methods>;
+              @android.webkit.JavascriptInterface <methods>;
           }
           -keep class rust.** { *; }
           -keep class com.tauri.** { *; }
           PRO
+
+          echo "=== build.gradle.kts (last 5 lines) ==="
+          tail -5 src-tauri/gen/android/app/build.gradle.kts
 
       - name: Build Android APK (release, signed, arm64 only)
         run: npx tauri android build --apk
