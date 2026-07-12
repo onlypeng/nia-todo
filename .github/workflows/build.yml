@@ -191,54 +191,138 @@ jobs:
 
       - name: Configure release signing and ABI filters
         run: |
-          # 创建 Groovy 配置脚本（只添加 build.gradle.kts 中不存在的配置，避免冲突）
-          # - signingConfigs: kts 中不存在，新增
-          # - ndk abiFilters: kts 中不存在，新增
-          # - signingConfig: kts release 块中不存在，追加
-          # - shrinkResources: kts release 块中不存在，追加
-          # - splits: kts 中不存在，新增
-          # - packaging excludes: kts 中不存在，新增
-          # 注意：不重复声明 minifyEnabled/proguardFiles，kts 中已有
-          cat > src-tauri/gen/android/app/ci-signing.gradle <<'GRADLE'
+          # 直接重写 build.gradle.kts，用纯 Kotlin DSL 语法注入所有优化配置
+          # 避免 Groovy/Kotlin DSL 混用导致的编译错误
+          cat > src-tauri/gen/android/app/build.gradle.kts <<'KTS'
+          import java.util.Properties
+
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+              id("rust")
+          }
+
+          val tauriProperties = Properties().apply {
+              val propFile = file("tauri.properties")
+              if (propFile.exists()) {
+                  propFile.inputStream().use { load(it) }
+              }
+          }
+
           android {
+              compileSdk = 36
+              namespace = "de.tobiaskneidl.nia_todo"
+
               signingConfigs {
-                  ciRelease {
-                      storeFile file(System.getProperty('user.home') + '/ci-keystore.jks')
-                      storePassword 'nia-todo-ci'
-                      keyAlias 'ci-key'
-                      keyPassword 'nia-todo-ci'
+                  create("ciRelease") {
+                      storeFile = file(System.getProperty("user.home") + "/ci-keystore.jks")
+                      storePassword = "nia-todo-ci"
+                      keyAlias = "ci-key"
+                      keyPassword = "nia-todo-ci"
                   }
               }
+
               defaultConfig {
+                  manifestPlaceholders["usesCleartextTraffic"] = "false"
+                  applicationId = "de.tobiaskneidl.nia_todo"
+                  minSdk = 24
+                  targetSdk = 36
+                  versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
+                  versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
                   ndk {
-                      abiFilters 'arm64-v8a'
+                      abiFilters += setOf("arm64-v8a")
                   }
               }
+
               buildTypes {
-                  release {
-                      signingConfig signingConfigs.ciRelease
-                      shrinkResources true
+                  getByName("debug") {
+                      manifestPlaceholders["usesCleartextTraffic"] = "true"
+                      isDebuggable = true
+                      isJniDebuggable = true
+                      isMinifyEnabled = false
+                      packaging {
+                          jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
+                          jniLibs.keepDebugSymbols.add("*/armeabi-v7a/*.so")
+                          jniLibs.keepDebugSymbols.add("*/x86/*.so")
+                          jniLibs.keepDebugSymbols.add("*/x86_64/*.so")
+                      }
+                  }
+                  getByName("release") {
+                      isMinifyEnabled = true
+                      isShrinkResources = true
+                      signingConfig = signingConfigs.getByName("ciRelease")
+                      proguardFiles(
+                          *fileTree(".") { include("**/*.pro") }
+                              .plus(getDefaultProguardFile("proguard-android-optimize.txt"))
+                              .toList().toTypedArray()
+                      )
                   }
               }
+
               splits {
                   abi {
-                      enable true
+                      isEnable = true
                       reset()
-                      include 'arm64-v8a'
-                      universalApk false
+                      include("arm64-v8a")
+                      isUniversalApk = false
                   }
               }
-              packagingOptions {
+
+              packaging {
                   jniLibs {
-                      excludes += ['lib/x86/**', 'lib/x86_64/**', 'lib/armeabi-v7a/**']
+                      excludes += setOf("lib/x86/**", "lib/x86_64/**", "lib/armeabi-v7a/**")
+                  }
+              }
+
+              kotlinOptions {
+                  jvmTarget = "1.8"
+              }
+              buildFeatures {
+                  buildConfig = true
+              }
+          }
+
+          rust {
+              rootDirRel = "../../../"
+          }
+
+          tasks.register("patchTauriWebChromeMicrophonePermission") {
+              val webChromeClient = file("src/main/java/de/tobiaskneidl/nia_todo/generated/RustWebChromeClient.kt")
+              doLast {
+                  if (!webChromeClient.exists()) return@doLast
+                  val source = webChromeClient.readText()
+                  val patched = source.replace(
+                      "      permissionList.add(Manifest.permission.MODIFY_AUDIO_SETTINGS)\n      permissionList.add(Manifest.permission.RECORD_AUDIO)",
+                      "      permissionList.add(Manifest.permission.RECORD_AUDIO)"
+                  )
+                  if (patched != source) {
+                      webChromeClient.writeText(patched)
+                      println("Patched Tauri WebView microphone permission request to RECORD_AUDIO only")
                   }
               }
           }
-          GRADLE
 
-          # 用 Kotlin DSL 语法 apply（不能在 .kts 文件里用 Groovy 语法 apply from:）
-          echo "" >> src-tauri/gen/android/app/build.gradle.kts
-          echo 'apply(from = "ci-signing.gradle")' >> src-tauri/gen/android/app/build.gradle.kts
+          tasks.matching { it.name.startsWith("compile") && it.name.endsWith("Kotlin") }.configureEach {
+              dependsOn("patchTauriWebChromeMicrophonePermission")
+          }
+
+          dependencies {
+              implementation("androidx.webkit:webkit:1.14.0")
+              implementation("androidx.appcompat:appcompat:1.7.1")
+              implementation("androidx.activity:activity-ktx:1.10.1")
+              implementation("androidx.credentials:credentials:1.5.0")
+              implementation("androidx.credentials:credentials-play-services-auth:1.5.0")
+              implementation("com.google.android.material:material:1.12.0")
+              implementation("com.google.android.gms:play-services-location:21.3.0")
+              implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
+              testImplementation("junit:junit:4.13.2")
+              androidTestImplementation("androidx.test.ext:junit:1.1.4")
+              androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
+          }
+
+          apply(from = "tauri.build.gradle.kts")
+          KTS
 
           # 创建 ProGuard 规则
           cat > src-tauri/gen/android/app/proguard-rules.pro <<'PRO'
@@ -250,8 +334,8 @@ jobs:
           -keep class com.tauri.** { *; }
           PRO
 
-          echo "=== build.gradle.kts (last 5 lines) ==="
-          tail -5 src-tauri/gen/android/app/build.gradle.kts
+          echo "=== build.gradle.kts written successfully ==="
+          wc -l src-tauri/gen/android/app/build.gradle.kts
 
       - name: Build Android APK (release, signed, arm64 only)
         run: npx tauri android build --apk
