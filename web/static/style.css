@@ -3464,7 +3464,9 @@ input[type="color"]::-moz-color-swatch {
 }
 
 .modal-downloads {
+  display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 4px;
 }

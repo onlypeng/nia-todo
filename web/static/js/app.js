@@ -847,7 +847,10 @@ const initApp = async function() {
   await appLifecycle.initApp();
   brainDumpLiveFeature.init();
   if (sharingFeature?.loadInvites) {
-    sharingFeature.loadInvites();
+    const hasAuthToken = Boolean(localStorage.getItem('jwt_token') || localStorage.getItem('auth_token'));
+    if (hasAuthToken) {
+      sharingFeature.loadInvites();
+    }
   }
 };
 const loadFromLocalDB = appLifecycle.loadFromLocalDB;

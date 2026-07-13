@@ -256,6 +256,11 @@ export function createProjectSharingFeature({
   }
 
   async function loadInvites() {
+    const hasAuthToken = Boolean(localStorage.getItem('jwt_token') || localStorage.getItem('auth_token'));
+    if (!hasAuthToken) {
+      console.debug('[Project Sharing] 未登录，跳过 invites 请求');
+      return;
+    }
     try {
       const res = await projectsApi.listInvites();
       const invites = res?.invites || [];
