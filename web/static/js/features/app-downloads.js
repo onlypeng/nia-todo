@@ -88,14 +88,8 @@ const DOWNLOADS_BY_PLATFORM = {
     titleKey: 'appDownloads.linux',
     variants: [
       {
-        variantId: 'appimage',
-        label: 'AppImage',
-        filenameSuffix: '-linux-x64.AppImage',
-        filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-linux-x64\.AppImage$/,
-      },
-      {
         variantId: 'deb',
-        label: 'Debian (.deb)',
+        label: 'Debian/Ubuntu (.deb)',
         filenameSuffix: '-linux-x64.deb',
         filenameRe: /^nia-todo-v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?-linux-x64\.deb$/,
       },
@@ -136,14 +130,21 @@ function validateDownloadEntry(app, fallbackVersion = '') {
   if (!app || typeof app !== 'object') return null;
   const platform = String(app.platform || '').toLowerCase();
   const platformSpec = DOWNLOADS_BY_PLATFORM[platform];
-  if (!platformSpec) return null;
+  if (!platformSpec) {
+    console.debug('[Downloads] validate: 未知平台', app.platform);
+    return null;
+  }
 
   const rawUrl = String(app.url || '').trim();
-  if (!rawUrl.startsWith('/downloads/')) return null;
+  if (!rawUrl.startsWith('/downloads/')) {
+    console.debug('[Downloads] validate: URL 不在 /downloads/ 下', rawUrl);
+    return null;
+  }
   let parsed;
   try {
     parsed = new URL(rawUrl, location.origin);
   } catch {
+    console.debug('[Downloads] validate: URL 解析失败', rawUrl);
     return null;
   }
   if (parsed.origin !== location.origin || parsed.search || parsed.hash) return null;
@@ -153,16 +154,36 @@ function validateDownloadEntry(app, fallbackVersion = '') {
 
   // 查找匹配的变体（通过文件名正则）
   const matchedVariant = platformSpec.variants.find((v) => v.filenameRe.test(filename));
-  if (!matchedVariant) return null;
+  if (!matchedVariant) {
+    console.debug('[Downloads] validate: 文件名不匹配任何变体', filename);
+    return null;
+  }
 
-  if (app.filename && String(app.filename) !== filename) return null;
-  if (app.arch && String(app.arch) !== platformSpec.arch) return null;
-  if (!DOWNLOAD_SHA_RE.test(String(app.sha256 || ''))) return null;
+  // 宽松校验：arch/filename 不一致只警告，不拒绝（兼容 manifest 中字段冗余的情况）
+  if (app.filename && String(app.filename) !== filename) {
+    console.warn('[Downloads] validate: filename 字段与 URL 不一致', app.filename, filename);
+  }
+  if (app.arch && String(app.arch) !== platformSpec.arch) {
+    console.warn('[Downloads] validate: arch 字段与平台定义不一致', app.arch, platformSpec.arch);
+  }
+
+  // sha256 缺失时降级（不阻塞显示），但格式错误时拒绝
+  const sha256 = String(app.sha256 || '').trim();
+  if (sha256 && !DOWNLOAD_SHA_RE.test(sha256)) {
+    console.warn('[Downloads] validate: sha256 格式无效', filename);
+    return null;
+  }
 
   const version = String(app.version || fallbackVersion || '').trim();
-  if (!DOWNLOAD_VERSION_RE.test(version)) return null;
+  if (!DOWNLOAD_VERSION_RE.test(version)) {
+    console.warn('[Downloads] validate: version 格式无效', version, filename);
+    return null;
+  }
   const versionSlug = normalizeVersion(version);
-  if (filename !== `nia-todo-v${versionSlug}${matchedVariant.filenameSuffix}`) return null;
+  if (filename !== `nia-todo-v${versionSlug}${matchedVariant.filenameSuffix}`) {
+    console.warn('[Downloads] validate: 文件名与版本号不匹配', filename, version);
+    return null;
+  }
 
   return {
     platform,
@@ -172,29 +193,37 @@ function validateDownloadEntry(app, fallbackVersion = '') {
     version,
     filename,
     url: absoluteDownloadUrl(parsed.pathname),
-    sha256: app.sha256 || '',
+    sha256: sha256 || '',
     sizeBytes: Number.isSafeInteger(app.size_bytes) && app.size_bytes > 0 ? app.size_bytes : null,
   };
 }
 
 function downloadsFromManifest(manifest) {
-  const version = manifest?.version || manifest?.latest?.version || '';
+  if (!manifest || typeof manifest !== 'object') {
+    console.warn('[Downloads] manifest 为空或非对象');
+    return [];
+  }
+  const version = manifest.version || manifest.latest?.version || '';
   // manifest.latest 可以是 { windows: {...}, android: {...}, ... }
   // manifest.apps 是一个数组，可包含同一平台的多个变体
-  const latestApps = manifest?.latest
+  const latestApps = manifest.latest
     ? Object.values(manifest.latest).filter((v) => v && typeof v === 'object' && v.platform)
     : [];
-  const apps = [...latestApps, ...(Array.isArray(manifest?.apps) ? manifest.apps : [])];
+  const apps = [...latestApps, ...(Array.isArray(manifest.apps) ? manifest.apps : [])];
+
+  console.debug('[Downloads] manifest 条目数:', apps.length, 'version:', version);
 
   // 按 platform:variant 去重，保留第一个有效的
   const seen = new Set();
   const byPlatform = new Map();
+  let validCount = 0;
   for (const app of apps) {
     const download = validateDownloadEntry(app, version);
     if (!download) continue;
     const key = `${download.platform}:${download.variant}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    validCount += 1;
 
     // 每个平台保留一个数组（多变体）
     if (!byPlatform.has(download.platform)) {
@@ -205,10 +234,13 @@ function downloadsFromManifest(manifest) {
 
   // 按平台优先级排序输出，每平台的变体也按定义顺序排序
   const platformOrder = ['windows', 'android', 'linux', 'macos'];
-  return platformOrder
-    .map((platform) => byPlatform.get(platform))
+  const result = platformOrder
+    .map((p) => byPlatform.get(p))
     .filter(Boolean)
     .flat();
+
+  console.info('[Downloads] 有效下载条目:', validCount, '平台数:', byPlatform.size);
+  return result;
 }
 
 function platformIconClass(platform) {
@@ -217,9 +249,8 @@ function platformIconClass(platform) {
 
 function platformTitle(download) {
   const spec = DOWNLOADS_BY_PLATFORM[download?.platform];
-  if (!spec) return `${download?.label || 'App'} herunterladen`;
-  const key = spec.titleKey;
-  return t(key, {}, `${spec.label} App herunterladen`);
+  if (!spec) return `${download?.label || 'App'}`;
+  return t(spec.titleKey);
 }
 
 function platformLabel(platform) {
@@ -657,6 +688,18 @@ export function createAppDownloadsFeature() {
   function installRefreshTriggers() {
     if (listenersInstalled) return;
     listenersInstalled = true;
+    let lastRefresh = 0;
+    const MIN_REFRESH_INTERVAL_MS = 30 * 1000; // 最小刷新间隔 30 秒，避免频繁请求
+    const guardedRefresh = (reason) => {
+      const now = Date.now();
+      if (now - lastRefresh < MIN_REFRESH_INTERVAL_MS) {
+        console.debug('[Downloads] 跳过刷新（间隔过短）', reason);
+        return;
+      }
+      lastRefresh = now;
+      console.debug('[Downloads] 触发刷新', reason);
+      refreshAppDownloads();
+    };
     window.addEventListener('beforeinstallprompt', (event) => {
       event.preventDefault();
       deferredPwaInstallPrompt = event;
@@ -667,12 +710,12 @@ export function createAppDownloadsFeature() {
       updateWebInstallUI();
     });
     window.addEventListener('nia-language-change', updateWebInstallUI);
-    window.addEventListener('online', () => { refreshAppDownloads(); });
-    window.addEventListener('focus', () => { refreshAppDownloads(); });
+    window.addEventListener('online', () => { guardedRefresh('online'); });
+    window.addEventListener('focus', () => { guardedRefresh('focus'); });
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') refreshAppDownloads();
+      if (document.visibilityState === 'visible') guardedRefresh('visibility');
     });
-    refreshInterval = window.setInterval(() => { refreshAppDownloads(); }, 60 * 60 * 1000);
+    refreshInterval = window.setInterval(() => { guardedRefresh('interval'); }, 60 * 60 * 1000);
   }
 
   async function initAppDownloads() {
@@ -680,7 +723,10 @@ export function createAppDownloadsFeature() {
     const downloadLaunchers = Array.from(document.querySelectorAll('[data-app-download-launcher]'));
     const nativeVersionTargets = Array.from(document.querySelectorAll('[data-native-app-version]'));
     updateWebInstallUI();
-    if (!downloadTargets.length && !downloadLaunchers.length && !nativeVersionTargets.length && !document.getElementById('native-app-update-modal')) return;
+    if (!downloadTargets.length && !downloadLaunchers.length && !nativeVersionTargets.length && !document.getElementById('native-app-update-modal')) {
+      console.debug('[Downloads] 页面无下载相关元素，跳过初始化');
+      return;
+    }
 
     const nativeBridge = createNativeBridge();
     installNativeChangelogLinks(nativeBridge);
@@ -693,36 +739,53 @@ export function createAppDownloadsFeature() {
       nativeVersionTargets.forEach((target) => { target.style.display = 'none'; });
     }
 
+    let manifest = null;
     try {
-      const manifest = await loadDownloadManifest();
-      const downloads = downloadsFromManifest(manifest);
-      if (!downloads.length) throw new Error('app downloads missing');
-
-      if (isBrowserDownloadEligible()) {
-        renderDownloadServerAddress(await getDownloadServerAddress());
-        downloadTargets.forEach((target) => renderDownloads(target, downloads));
-        setDownloadLaunchersVisible(downloadLaunchers, true);
-      } else {
-        downloadTargets.forEach((target) => setDownloadTargetVisible(target, false));
-        setDownloadLaunchersVisible(downloadLaunchers, false);
-      }
-
-      const nativeDownload = downloads.find((download) => download.platform === nativePlatform);
-      const runtimeInstance = hasNativeVersion ? await refreshRuntimeInstance() : window.NIA_TODO_RUNTIME?.instance;
-      const minNativeClientVersion = getMinimumNativeClientVersion(runtimeInstance);
-      const updateAvailable = nativeDownload?.version && currentVersion && compareVersions(nativeDownload.version, currentVersion) > 0;
-      const updateRequired = nativeDownload?.version && currentVersion && minNativeClientVersion && compareVersions(minNativeClientVersion, currentVersion) > 0;
-      const dismissedKey = nativeDownload ? nativeUpdateKey(nativeDownload.platform, currentVersion, nativeDownload.version) : '';
-      if (updateRequired) {
-        showNativeUpdateModal(nativeDownload, currentVersion, nativeBridge, { forced: true, minVersion: minNativeClientVersion });
-      } else if (updateAvailable && !dismissedNativeUpdateKeys.has(dismissedKey)) {
-        showNativeUpdateModal(nativeDownload, currentVersion, nativeBridge, { forced: false, minVersion: minNativeClientVersion });
-      }
+      manifest = await loadDownloadManifest();
+      console.info('[Downloads] manifest 加载成功', manifest?.version, 'apps:', manifest?.apps?.length || 0);
     } catch (error) {
-      console.info('[Downloads] No app download available', error);
+      // manifest 加载失败：记录错误，不隐藏启动器（保留上次状态或等待下次刷新）
+      console.warn('[Downloads] manifest 加载失败，保留当前状态等待重试', error.message);
+      return;
+    }
+
+    const downloads = downloadsFromManifest(manifest);
+    if (!downloads.length) {
+      // manifest 加载成功但无有效条目：记录警告，隐藏下载区域但不抛错
+      console.warn('[Downloads] manifest 中无有效下载条目');
       downloadTargets.forEach((target) => setDownloadTargetVisible(target, false));
       setDownloadLaunchersVisible(downloadLaunchers, false);
       if (!hasNativeVersion) nativeVersionTargets.forEach((target) => { target.style.display = 'none'; });
+      return;
+    }
+
+    // 有有效下载条目：显示下载入口
+    if (isBrowserDownloadEligible()) {
+      try {
+        renderDownloadServerAddress(await getDownloadServerAddress());
+      } catch (error) {
+        console.warn('[Downloads] 服务器地址获取失败，使用默认', error);
+        renderDownloadServerAddress(serverAddressFromUrl(location.origin));
+      }
+      downloadTargets.forEach((target) => renderDownloads(target, downloads));
+      setDownloadLaunchersVisible(downloadLaunchers, true);
+      console.info('[Downloads] 下载入口已显示');
+    } else {
+      downloadTargets.forEach((target) => setDownloadTargetVisible(target, false));
+      setDownloadLaunchersVisible(downloadLaunchers, false);
+    }
+
+    // 原生应用更新检查
+    const nativeDownload = downloads.find((download) => download.platform === nativePlatform);
+    const runtimeInstance = hasNativeVersion ? await refreshRuntimeInstance() : window.NIA_TODO_RUNTIME?.instance;
+    const minNativeClientVersion = getMinimumNativeClientVersion(runtimeInstance);
+    const updateAvailable = nativeDownload?.version && currentVersion && compareVersions(nativeDownload.version, currentVersion) > 0;
+    const updateRequired = nativeDownload?.version && currentVersion && minNativeClientVersion && compareVersions(minNativeClientVersion, currentVersion) > 0;
+    const dismissedKey = nativeDownload ? nativeUpdateKey(nativeDownload.platform, currentVersion, nativeDownload.version) : '';
+    if (updateRequired) {
+      showNativeUpdateModal(nativeDownload, currentVersion, nativeBridge, { forced: true, minVersion: minNativeClientVersion });
+    } else if (updateAvailable && !dismissedNativeUpdateKeys.has(dismissedKey)) {
+      showNativeUpdateModal(nativeDownload, currentVersion, nativeBridge, { forced: false, minVersion: minNativeClientVersion });
     }
   }
 

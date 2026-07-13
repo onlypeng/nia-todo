@@ -290,47 +290,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Linux AppImage and deb
-        run: npx tauri build --bundles appimage,deb
+      - name: Build Linux deb
+        run: npx tauri build --bundles deb
 
       - name: Prepare downloads directory
         run: mkdir -p web/downloads
 
-      - name: Copy Linux AppImage
-        run: |
-          APPIMAGE=$(find src-tauri/target/release/bundle -name "*.AppImage" -type f 2>/dev/null | head -n 1)
-          if [ -z "$APPIMAGE" ]; then
-            echo "::error::未找到 AppImage"
-            find src-tauri/target/release/bundle/ -type f 2>/dev/null || true
-            exit 1
-          fi
-          cp "$APPIMAGE" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.AppImage"
-          echo "Copied: $APPIMAGE"
-
       - name: Copy Linux deb (client)
         run: |
           LINUX_DEB=$(find src-tauri/target/release/bundle/deb -name "*.deb" -type f 2>/dev/null | head -n 1)
-          if [ -n "$LINUX_DEB" ]; then
-            cp "$LINUX_DEB" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.deb"
-            echo "Copied: $LINUX_DEB"
-          else
-            echo "No Linux client deb found (non-fatal)"
+          if [ -z "$LINUX_DEB" ]; then
+            echo "::error::未找到 Linux deb"
+            find src-tauri/target/release/bundle/ -type f 2>/dev/null || true
+            exit 1
           fi
-
-      - name: Report artifact sizes
-        run: |
-          echo "=== Linux client artifact sizes ==="
-          ls -lah web/downloads/
-          echo ""
-          echo "=== Size comparison ==="
-          APPIMAGE="web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.AppImage"
-          if [ -f "$APPIMAGE" ]; then
-            echo "AppImage: $(du -h "$APPIMAGE" | cut -f1)"
-          fi
-          DEB="web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.deb"
-          if [ -f "$DEB" ]; then
-            echo "deb: $(du -h "$DEB" | cut -f1)"
-          fi
+          cp "$LINUX_DEB" "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.deb"
+          echo "Copied: $LINUX_DEB"
+          echo "deb size: $(du -h "web/downloads/nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.deb" | cut -f1)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -432,12 +408,11 @@ jobs:
           REQUIRED_FILES=(
             "nia-todo-v${VERSION}-windows-x64-setup.exe"
             "nia-todo-v${VERSION}-android-arm64.apk"
-            "nia-todo-v${VERSION}-linux-x64.AppImage"
+            "nia-todo-v${VERSION}-linux-x64.deb"
           )
           # 可选的安装包（缺失只警告）
           OPTIONAL_FILES=(
             "nia-todo-v${VERSION}-windows-x64-setup.msi"
-            "nia-todo-v${VERSION}-linux-x64.deb"
           )
           echo "=== Required artifacts ==="
           for f in "${REQUIRED_FILES[@]}"; do
@@ -482,8 +457,7 @@ jobs:
               ('windows', 'nsis', 'x64', '-windows-x64-setup.exe', 'NSIS Setup (.exe)', True),
               ('windows', 'msi',   'x64', '-windows-x64-setup.msi', 'MSI Installer (.msi)', False),
               ('android', 'apk',   'arm64', '-android-arm64.apk', 'APK (arm64-v8a)', True),
-              ('linux',   'appimage', 'x64', '-linux-x64.AppImage', 'AppImage', True),
-              ('linux',   'deb',   'x64', '-linux-x64.deb', 'Debian (.deb)', False),
+              ('linux',   'deb',   'x64', '-linux-x64.deb', 'Debian/Ubuntu (.deb)', True),
               ('macos',   'dmg',   'arm64', '-macos-arm64.dmg', 'DMG', False),
           ]
 
@@ -671,7 +645,6 @@ jobs:
             | Windows | `nia-todo-v${{ needs.prepare.outputs.version }}-windows-x64-setup.exe` | NSIS 安装程序 |
             | Windows | `nia-todo-v${{ needs.prepare.outputs.version }}-windows-x64-setup.msi` | MSI 安装程序 |
             | Android | `nia-todo-v${{ needs.prepare.outputs.version }}-android-arm64.apk` | APK 安装包 |
-            | Linux 客户端 | `nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.AppImage` | AppImage 免安装 |
             | Linux 客户端 | `nia-todo-v${{ needs.prepare.outputs.version }}-linux-x64.deb` | Debian/Ubuntu 客户端包 |
             | Linux 服务器 | `nia-todo-server-v${{ needs.prepare.outputs.version }}-full.deb` | Debian/Ubuntu 服务器包 |
 
@@ -694,7 +667,7 @@ jobs:
 
             - **Windows**: 双击 `.exe` 安装
             - **Android**: 安装 `.apk` 文件
-            - **Linux 客户端**: `chmod +x *.AppImage && ./nia-todo-*.AppImage` 或 `sudo apt install ./nia-todo-v*-linux-x64.deb`
+            - **Linux 客户端**: `sudo apt install ./nia-todo-v*-linux-x64.deb`
             - **Linux 服务器**: `sudo apt install ./nia-todo-server-v*-full.deb`
             - **Docker**: 见 [README](README.md#-docker)
 
