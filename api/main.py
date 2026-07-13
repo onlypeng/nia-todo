@@ -466,6 +466,7 @@ if WEB_DIR.exists():
     def app_downloads_manifest():
         import hashlib
         import re
+        import json
 
         manifest_path = DOWNLOADS_DIR / "app-downloads.json"
         base_manifest = {"version": "", "latest": {}, "apps": []}
